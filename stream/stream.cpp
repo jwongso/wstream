@@ -204,51 +204,57 @@ void key_listener(ChatAPI& chatapi, audio_async& audio, std::shared_ptr<shared_s
 
     tcsetattr(STDIN_FILENO, TCSANOW, &oldt);  // Restore terminal settings
 }
-// Function to extract new content from the transcription
-std::string extract_new_content(const std::string& previous, const std::string& current) {
-    if (previous.empty()) {
-        return current; // No previous transcription, return the entire current transcription
-    }
-
-    // Find the position where the previous transcription ends in the current transcription
-    auto pos = std::search(current.begin(), current.end(), previous.begin(), previous.end());
-    if (pos != current.end()) {
-        // Extract the new content after the previous transcription
-        return std::string(pos + previous.length(), current.end());
-    }
-
-    // No match found, return the entire current transcription
-    return current;
-}
 
 // Function to remove partial bracketed text (e.g., [inaudible], [ Background Conversations ])
-std::string remove_bracketed_text(const std::string& text) {
-    std::string cleaned_text = text;
-    size_t start_pos = cleaned_text.find('[');
-    while (start_pos != std::string::npos) {
-        size_t end_pos = cleaned_text.find(']', start_pos);
-        if (end_pos != std::string::npos) {
-            // Remove the bracketed text
-            cleaned_text.erase(start_pos, end_pos - start_pos + 1);
-        } else {
-            break; // No closing bracket found
+void remove_bracketed_text(std::string& text) {
+    size_t write_pos = 0;
+    bool in_bracket = false;
+
+    for (size_t read_pos = 0; read_pos < text.size(); ++read_pos) {
+        const char c = text[read_pos];
+
+        if (c == '[') {
+            in_bracket = true;
+            continue;
         }
-        start_pos = cleaned_text.find('[', start_pos);
+
+        if (in_bracket) {
+            if (c == ']') in_bracket = false;
+            continue;
+        }
+
+        // Only copy if positions differ
+        if (write_pos != read_pos) {
+            text[write_pos] = c;
+        }
+        write_pos++;
     }
-    return cleaned_text;
+
+    text.resize(write_pos);
 }
 
 // Function to trim leading and trailing whitespace
-std::string lrtrim(const std::string& text) {
-    const char* whitespace = " \t\n\r";
-    size_t start = text.find_first_not_of(whitespace);
-    size_t end = text.find_last_not_of(whitespace);
+void lrtrim(std::string &s) {
+    static constexpr const char* whitespace = " \t\n\r\f\v";
 
+    // Left trim
+    size_t start = s.find_first_not_of(whitespace);
     if (start == std::string::npos) {
-        return ""; // The string is all whitespace
+        s.clear();
+        return;
     }
 
-    return text.substr(start, end - start + 1);
+    // Right trim
+    size_t end = s.find_last_not_of(whitespace);
+
+    // In-place modification
+    if (start != 0 || end != s.length() - 1) {
+        if (end != std::string::npos) {
+            s = s.substr(start, end - start + 1);
+        } else {
+            s = s.substr(start);
+        }
+    }
 }
 
 int main() {
@@ -280,7 +286,6 @@ int main() {
 
     // Main loop
     std::vector<float> pcmf32(WHISPER_SAMPLE_RATE * 15, 0.0f); // 15 seconds of audio
-    std::string previous_transcription;
 
     // VAD parameters
     float vad_thold = 0.85f; // Increase to reduce sensitivity
@@ -332,10 +337,10 @@ int main() {
                 }
 
                 // Remove partial bracketed text (e.g., [inaudible], [ Background Conversations ])
-                current_transcription = remove_bracketed_text(current_transcription);
+                remove_bracketed_text(current_transcription);
 
                 // Trim leading and trailing whitespace
-                current_transcription = lrtrim(current_transcription);
+                lrtrim(current_transcription);
 
                 // Skip if the transcription is empty after cleaning
                 if (current_transcription.empty()) {
@@ -343,13 +348,12 @@ int main() {
                 }
 
                 // Extract new content by comparing with the previous transcription
-                std::string new_content = extract_new_content(previous_transcription, current_transcription);
+                const std::string new_content = current_transcription;
 
                 // Add the new content to the transcriptions vector if it's not empty
                 if (!new_content.empty()) {
                     transcriptions.push_back(new_content);
                     std::cout << new_content << std::endl; // Print the new content
-                    previous_transcription = current_transcription; // Update the previous transcription
 
                     nlohmann::json transcribe_message = {
                         {"type", "transcribe"},
