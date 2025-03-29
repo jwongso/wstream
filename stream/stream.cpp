@@ -26,7 +26,7 @@ using tcp = net::ip::tcp;
 using namespace hyni;
 
 // Global flag for pause/resume
-std::atomic<bool> is_paused(false);
+std::atomic<bool> is_running(true);
 std::atomic<bool> is_cleared(false);
 
 // Global vector to store transcriptions
@@ -105,7 +105,7 @@ void do_session(tcp::socket socket, std::shared_ptr<shared_state> state, ChatAPI
 
         state->join(&ws);
 
-        for (;;) {
+        while (is_running) {
             beast::flat_buffer buffer;
             ws.read(buffer);
             // Convert the message to a string
@@ -148,11 +148,14 @@ void websocket_server(std::shared_ptr<shared_state> state, ChatAPI& chatapi) {
 
         std::cout << "WebSocket server is running on port 8080..." << std::endl;
 
-        for (;;) {
+        while (is_running) {
             tcp::socket socket{ioc};
             acceptor.accept(socket);
+            if (!is_running) break;
             std::thread{do_session, std::move(socket), state, std::ref(chatapi)}.detach();
         }
+
+        ioc.stop();
     } catch (std::exception const& e) {
         std::cerr << "WebSocket Server Error: " << e.what() << std::endl;
     }
@@ -163,29 +166,37 @@ void key_listener(ChatAPI& chatapi, audio_async& audio, std::shared_ptr<shared_s
     struct termios oldt, newt;
     tcgetattr(STDIN_FILENO, &oldt);
     newt = oldt;
-    newt.c_lflag &= ~(ICANON | ECHO);  // Disable buffering and echoing
+    newt.c_lflag &= ~(ICANON | ECHO);
     tcsetattr(STDIN_FILENO, TCSANOW, &newt);
 
-    while (true) {
-        char ch = getchar();
-        if (ch == 's') {
-            // Check if a WebSocket client is connected
-            if (state->is_client_connected()) {
-                std::cout << "WebSocket client is connected. Waiting for prompt from client..." << std::endl;
-            } else {
-                // No WebSocket client connected, proceed with keypress behavior
-                if (!transcriptions.empty()) {
-                    std::string combined_transcription;
-                    for (const auto& text : transcriptions) {
-                        combined_transcription += text + " ";
+    while (is_running) {
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(STDIN_FILENO, &fds);
+        struct timeval timeout = {0, 100000};
+
+        int ret = select(STDIN_FILENO + 1, &fds, NULL, NULL, &timeout);
+        if (ret > 0 && FD_ISSET(STDIN_FILENO, &fds) && is_running) {
+            char ch = getchar();
+            if (ch == 's') {
+                // Check if a WebSocket client is connected
+                if (state->is_client_connected()) {
+                    std::cout << "WebSocket client is connected. Waiting for prompt from client..." << std::endl;
+                } else {
+                    // No WebSocket client connected, proceed with keypress behavior
+                    if (!transcriptions.empty()) {
+                        std::string combined_transcription;
+                        for (const auto& text : transcriptions) {
+                            combined_transcription += text + " ";
+                        }
+
+                        // Use the helper function to process the prompt
+                        process_prompt(combined_transcription, false, chatapi, state);
+
+                        // Clear the transcriptions vector and audio buffer
+                        transcriptions.clear();
+                        audio.clear();
                     }
-
-                    // Use the helper function to process the prompt
-                    process_prompt(combined_transcription, false, chatapi, state);
-
-                    // Clear the transcriptions vector and audio buffer
-                    transcriptions.clear();
-                    audio.clear();
                 }
             }
         }
@@ -243,7 +254,7 @@ std::string lrtrim(const std::string& text) {
 int main() {
     // Initialize whisper context
     struct whisper_context_params cparams = whisper_context_default_params();
-    struct whisper_context* ctx = whisper_init_from_file_with_params("models/ggml-medium.en.bin", cparams);
+    struct whisper_context* ctx = whisper_init_from_file_with_params("models/ggml-small.en.bin", cparams);
     if (!ctx) {
         std::cerr << "Failed to initialize Whisper context.\n";
         return 1;
@@ -263,11 +274,9 @@ int main() {
     // Start the WebSocket server
     auto state = std::make_shared<shared_state>();
     std::thread ws_thread(websocket_server, state, std::ref(chatapi));
-    ws_thread.detach();
 
     // Start the key listener thread
     std::thread key_thread(key_listener, std::ref(chatapi), std::ref(audio), state);
-    key_thread.detach();
 
     // Main loop
     std::vector<float> pcmf32(WHISPER_SAMPLE_RATE * 15, 0.0f); // 15 seconds of audio
@@ -276,10 +285,12 @@ int main() {
     // VAD parameters
     float vad_thold = 0.85f; // Increase to reduce sensitivity
     float freq_thold = 100.0f; // Frequency threshold for VAD
-    bool is_running = true;
 
     while (is_running) {
         is_running = sdl_poll_events();
+        if (!is_running) {
+            break;
+        }
 
         if (is_cleared) {
             pcmf32.clear();
@@ -352,8 +363,14 @@ int main() {
         }
     }
 
-    // Clean up
+    std::cout << "CTRL-C again to exit..." << std::endl;
     audio.pause();
+    SDL_Quit();
+    is_running = false;
+    if (ws_thread.joinable()) ws_thread.join();
+    if (key_thread.joinable()) key_thread.join();
+
     whisper_free(ctx);
+
     return 0;
 }
