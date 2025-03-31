@@ -27,7 +27,7 @@ public:
     std::string sendMessage(const std::string& message,
                             QuestionType type = ChatAPI::QuestionType::General,
                             int max_tokens = 1200,
-                            float temperature = 0.7f);
+                            double temperature = 0.7);
 
     std::string getAssistantReply(const std::string& jsonResponse);
 

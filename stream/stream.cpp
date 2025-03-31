@@ -11,7 +11,6 @@
 #include <string>
 #include <unistd.h>
 #include <vector>
-#include <algorithm>
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/asio/ip/tcp.hpp>

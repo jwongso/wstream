@@ -32,7 +32,7 @@ ChatAPI::ChatAPI(const std::string& url)
 std::string ChatAPI::sendMessage(const std::string& message,
                                  QuestionType type,
                                  int max_tokens,
-                                 float temperature) {
+                                 double temperature) {
     CURL* curl;
     CURLcode res;
     std::string readBuffer;
@@ -54,12 +54,8 @@ std::string ChatAPI::sendMessage(const std::string& message,
 
         payload["max_tokens"] = max_tokens;
 
-        // Set temperature defaults
-        if (temperature == -1.0f) {
-            payload["temperature"] = 0.7f;
-        } else {
-            payload["temperature"] = temperature;
-        }
+        //temperature = std::round(temperature * 100) / 100;
+        payload["temperature"] = temperature;
 
         // OpenAI-specific settings
         if (api_provider == APIProvider::OpenAI) {

@@ -9,6 +9,19 @@ find_package(SDL2 REQUIRED)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../common)
 include_directories(${SDL2_INCLUDE_DIRS})
 
+set(TARGET common-sdl)
+
+add_library(${TARGET} STATIC
+    common-sdl.h
+    common-sdl.cpp
+    )
+
+target_include_directories(${TARGET} PUBLIC  ${SDL2_INCLUDE_DIRS})
+target_link_libraries     (${TARGET} PRIVATE ${SDL2_LIBRARIES})
+
+set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties(${TARGET} PROPERTIES FOLDER "libs")
+
 set(TARGET wstream)
 add_executable(${TARGET} stream.cpp chatapi.cpp chatapi.h config.h)
 

@@ -110,6 +110,56 @@ public:
         return result;
     }
 
+    static void lrtrim(std::string &s) noexcept {
+        static constexpr const char* whitespace = " \t\n\r\f\v";
+
+        // Left trim
+        size_t start = s.find_first_not_of(whitespace);
+        if (start == std::string::npos) {
+            s.clear();
+            return;
+        }
+
+        // Right trim
+        size_t end = s.find_last_not_of(whitespace);
+
+        // In-place modification
+        if (start != 0 || end != s.length() - 1) {
+            if (end != std::string::npos) {
+                s = s.substr(start, end - start + 1);
+            } else {
+                s = s.substr(start);
+            }
+        }
+    }
+
+    static void remove_bracketed_text(std::string& text) noexcept {
+        size_t write_pos = 0;
+        bool in_bracket = false;
+
+        for (size_t read_pos = 0; read_pos < text.size(); ++read_pos) {
+            const char c = text[read_pos];
+
+            if (c == '[' || c == '(') {
+                in_bracket = true;
+                continue;
+            }
+
+            if (in_bracket) {
+                if (c == ']' || c == ')') in_bracket = false;
+                continue;
+            }
+
+            // Only copy if positions differ
+            if (write_pos != read_pos) {
+                text[write_pos] = c;
+            }
+            write_pos++;
+        }
+
+        text.resize(write_pos);
+    }
+
 private:
     [[nodiscard]] static constexpr bool isFilteredChar(char ch) noexcept {
         const unsigned char uc = static_cast<unsigned char>(ch);

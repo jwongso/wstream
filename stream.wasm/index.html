@@ -3,115 +3,175 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Whisper.WASM Streaming Demo</title>
+    <title>hyni - Whisper.cpp Web Demo</title>
     <style>
+        :root {
+            --primary: #6d28d9;
+            --primary-dark: #5b21b6;
+            --dark: #1e293b;
+            --light: #f8fafc;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --gray: #94a3b8;
+        }
+
         body {
-            font-family: Arial, sans-serif;
+            font-family: 'Fira Code', monospace;
+            background-color: #f1f5f9;
+            color: var(--dark);
             max-width: 800px;
             margin: 0 auto;
-            padding: 20px;
+            padding: 1rem;
+            line-height: 1.4;
+            font-size: 0.85rem;
         }
+
+        h1 {
+            color: var(--primary);
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            font-size: 1.25rem;
+        }
+
+        h2 {
+            color: var(--dark);
+            font-weight: 600;
+            margin-top: 1rem;
+            margin-bottom: 0.5rem;
+            font-size: 1rem;
+        }
+
         #status {
-            padding: 12px;
-            margin: 15px 0;
-            border-radius: 5px;
-            font-weight: bold;
+            padding: 0.5rem;
+            margin: 0.5rem 0;
+            border-radius: 0.25rem;
+            font-weight: 500;
+            font-size: 0.8rem;
         }
-        .loading { background: #fff3cd; color: #856404; }
-        .ready { background: #d4edda; color: #155724; }
-        .error { background: #f8d7da; color: #721c24; }
+
+        .loading { background: #fffbeb; color: #b45309; }
+        .ready { background: #ecfdf5; color: #047857; }
+        .error { background: #fee2e2; color: #b91c1c; }
+
         button {
-            padding: 10px 15px;
-            margin: 5px;
-            background: #007bff;
+            padding: 0.5rem 0.75rem;
+            background: var(--primary);
             color: white;
             border: none;
-            border-radius: 4px;
+            border-radius: 0.25rem;
             cursor: pointer;
-            font-size: 16px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            margin-right: 0.5rem;
+            margin-bottom: 0.5rem;
         }
+
+        button:hover {
+            background: var(--primary-dark);
+        }
+
         button:disabled {
-            background: #6c757d;
+            background: var(--gray);
             cursor: not-allowed;
         }
-        #output {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 5px;
-            margin-top: 15px;
-            white-space: pre-wrap;
-            font-family: monospace;
-            min-height: 100px;
-            max-height: 300px;
-            overflow-y: auto;
+
+        #model-selection {
+            margin-bottom: 1rem;
         }
-        .container {
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }
-        .button-group {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
+
         #model-status {
-            margin: 10px 0;
-            font-weight: bold;
-            padding: 8px;
-            border-radius: 4px;
+            margin: 0.5rem 0;
+            font-weight: 500;
+            font-size: 0.8rem;
         }
+
         .model-btn {
-            margin: 5px;
-            padding: 8px 12px;
-            background: #4a6baf;
+            padding: 0.5rem 0.75rem;
+            background: var(--primary);
             color: white;
             border: none;
-            border-radius: 4px;
+            border-radius: 0.25rem;
             cursor: pointer;
+            font-size: 0.8rem;
+            margin-right: 0.5rem;
         }
-        .model-btn:hover {
-            background: #3a5a9f;
-        }
+
         #download-progress {
-            margin: 10px 0;
-            font-size: 0.9em;
-            color: #666;
+            margin: 0.5rem 0;
+            font-size: 0.8rem;
         }
+
         .progress-bar {
-            height: 5px;
-            background: #e9ecef;
-            border-radius: 3px;
-            margin-top: 5px;
+            height: 0.25rem;
+            background: #e2e8f0;
+            border-radius: 0.125rem;
+            margin-top: 0.25rem;
             overflow: hidden;
         }
+
         .progress-bar-fill {
             height: 100%;
-            background: #28a745;
+            background: var(--primary);
             width: 0%;
             transition: width 0.3s ease;
         }
+
+        .console-style {
+            background: var(--dark);
+            color: #f8fafc;
+            padding: 0.75rem;
+            border-radius: 0.25rem;
+            margin: 0.5rem 0;
+            font-family: 'Fira Code', monospace;
+            white-space: pre-wrap;
+            overflow-x: auto;
+            font-size: 0.8rem;
+            line-height: 1.4;
+        }
+
         #transcription-container {
-            margin-top: 20px;
-            border-top: 1px solid #eee;
-            padding-top: 20px;
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        #output {
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.15rem 0.3rem;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border-radius: 0.125rem;
+            font-size: 0.7rem;
+            font-weight: 500;
+            margin-left: 0.25rem;
         }
     </style>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="container">
-        <h1>Whisper.WASM Streaming Demo</h1>
-        <div id="status" class="loading">Loading WebAssembly runtime...</div>
+        <h1>hyni <span style="color: var(--gray);">powered by Whisper.cpp</span></h1>
 
-        <!-- Model Selection Section -->
+        <div id="status" class="ready">WASM Runtime Ready</div>
+
         <div id="model-selection">
-            <h3>Select Whisper Model:</h3>
+            <h2>Select Whisper Model:</h2>
             <div id="model-status">No model selected</div>
-            <div class="button-group">
-                <button class="model-btn" id="fetch-whisper-tiny-en" onclick="loadWhisper('tiny.en')">tiny.en (75 MB)</button>
-                <button class="model-btn" id="fetch-whisper-base-en" onclick="loadWhisper('base.en')">base.en (142 MB)</button>
-                <button class="model-btn" id="fetch-whisper-tiny-en-q5_1" onclick="loadWhisper('tiny-en-q5_1')">tiny.en-q5_1 (31 MB)</button>
-                <button class="model-btn" id="fetch-whisper-base-en-q5_1" onclick="loadWhisper('base-en-q5_1')">base.en-q5_1 (57 MB)</button>
+            <div>
+                <button class="model-btn" id="fetch-whisper-tiny-en" onclick="loadWhisper('tiny.en')">
+                    tiny.en<span class="badge">75 MB</span>
+                </button>
+                <button class="model-btn" id="fetch-whisper-base-en" onclick="loadWhisper('base.en')">
+                    base.en<span class="badge">142 MB</span>
+                </button>
+                <button class="model-btn" id="fetch-whisper-small-en" onclick="loadWhisper('small.en')">
+                    base.en<span class="badge">490 MB</span>
+                </button>
             </div>
             <div id="download-progress">
                 <span id="fetch-whisper-progress"></span>
@@ -121,33 +181,21 @@
             </div>
         </div>
 
-        <div class="button-group">
+        <h2>Recording Controls</h2>
+        <div>
             <button id="start" disabled>Start Recording</button>
             <button id="stop" disabled>Stop Recording</button>
             <button id="clear" onclick="clearCache()">Clear Cache</button>
         </div>
 
-        <div id="output"></div>
-
         <div id="transcription-container">
-            <h3>Live Transcription:</h3>
-            <div id="state-transcribed">[The transcribed text will be displayed here]</div>
+            <h2>Live Transcription</h2>
+            <div id="state-transcribed" class="console-style">[Your transcribed text will appear here in real-time]</div>
         </div>
 
-        <hr>
-
-        <div>
-            <h3>Troubleshooting</h3>
-            <p>The page does some heavy computations, so make sure:</p>
-            <ul>
-                <li>To use a modern web browser (e.g. Chrome, Firefox)</li>
-                <li>To use a fast desktop or laptop computer (i.e. not a mobile phone)</li>
-                <li>Your browser supports WASM <a href="https://webassembly.org/roadmap/">Fixed-width SIMD</a></li>
-            </ul>
-
-            <p>
-                <a href="https://github.com/ggerganov/whisper.cpp/tree/master/examples/stream.wasm">Source Code on GitHub</a>
-            </p>
+        <div id="output-container">
+            <h2>Console Output</h2>
+            <div id="output" class="console-style"></div>
         </div>
     </div>
 
@@ -226,15 +274,13 @@
             let urls = {
                 'tiny.en': 'https://whisper.ggerganov.com/ggml-model-whisper-tiny.en.bin',
                 'base.en': 'https://whisper.ggerganov.com/ggml-model-whisper-base.en.bin',
-                'tiny-en-q5_1': 'https://whisper.ggerganov.com/ggml-model-whisper-tiny.en-q5_1.bin',
-                'base-en-q5_1': 'https://whisper.ggerganov.com/ggml-model-whisper-base.en-q5_1.bin',
+                'small.en': 'https://whisper.ggerganov.com/ggml-model-whisper-small.en.bin',
             };
 
             let sizes = {
                 'tiny.en': 75,
                 'base.en': 142,
-                'tiny-en-q5_1': 31,
-                'base-en-q5_1': 57,
+                'small.en': 490,
             };
 
             let url = urls[model];
@@ -245,8 +291,7 @@
 
             document.getElementById('fetch-whisper-tiny-en').style.display = 'none';
             document.getElementById('fetch-whisper-base-en').style.display = 'none';
-            document.getElementById('fetch-whisper-tiny-en-q5_1').style.display = 'none';
-            document.getElementById('fetch-whisper-base-en-q5_1').style.display = 'none';
+            document.getElementById('fetch-whisper-small-en').style.display = 'none';
 
             document.getElementById('model-status').textContent = 'Loading "' + model + '" ... ';
             document.getElementById('model-status').className = 'loading';
@@ -263,8 +308,7 @@
                 var el;
                 el = document.getElementById('fetch-whisper-tiny-en'); if (el) el.style.display = 'inline-block';
                 el = document.getElementById('fetch-whisper-base-en'); if (el) el.style.display = 'inline-block';
-                el = document.getElementById('fetch-whisper-tiny-en-q5_1'); if (el) el.style.display = 'inline-block';
-                el = document.getElementById('fetch-whisper-base-en-q5_1'); if (el) el.style.display = 'inline-block';
+                el = document.getElementById('fetch-whisper-small-en'); if (el) el.style.display = 'inline-block';
 
                 el = document.getElementById('model-status'); if (el) el.textContent = 'Download cancelled';
                 el = document.getElementById('model-status'); if (el) el.className = 'error';
@@ -278,7 +322,7 @@
 
         // Microphone handling
         const kSampleRate = 16000;
-        const kRestartRecording_s = 120;
+        const kRestartRecording_s = 60;
         const kIntervalAudio_ms = 5000; // Pass the recorded audio to the C++ instance at this rate
 
         var mediaRecorder = null;
@@ -450,36 +494,36 @@
 
             intervalUpdate = setInterval(function() {
                 var transcribed = Module.get_transcribed();
-
-                if (transcribed != null && transcribed.length > 1) {
-                    transcribedAll += transcribed + '<br>';
-                    nLines++;
-
-                    // If more than 10 lines, remove the first line
-                    if (nLines > 10) {
-                        var i = transcribedAll.indexOf('<br>');
-                        if (i > 0) {
-                            transcribedAll = transcribedAll.substring(i + 4);
-                            nLines--;
-                        }
-                    }
+                if (transcribed && transcribed.length > 0) {
+                    document.getElementById('state-transcribed').textContent = transcribed;
                 }
-
-                document.getElementById('status').innerHTML = Module.get_status();
-                document.getElementById('state-transcribed').innerHTML = transcribedAll;
+                document.getElementById('status').textContent = Module.get_status();
             }, 100);
         }
 
         function clearCache() {
-            if (window.indexedDB) {
-                indexedDB.deleteDatabase('whisper.ggerganov.com');
-                printTextarea("Cache cleared. Please reload the page.");
-                document.getElementById('status').textContent = "Cache cleared. Please reload the page.";
-            } else {
-                printTextarea("IndexedDB not supported - cannot clear cache");
-                document.getElementById('status').textContent = "Error: IndexedDB not supported";
-                document.getElementById('status').className = "error";
-            }
+            // if (window.indexedDB) {
+            //     indexedDB.deleteDatabase('whisper.ggerganov.com');
+            //     printTextarea("Cache cleared. Please reload the page.");
+            //     document.getElementById('status').textContent = "Cache cleared. Please reload the page.";
+            // } else {
+            //     printTextarea("IndexedDB not supported - cannot clear cache");
+            //     document.getElementById('status').textContent = "Error: IndexedDB not supported";
+            //     document.getElementById('status').className = "error";
+            // }
+            const clearBtn = document.getElementById('clear');
+            clearBtn.textContent = "Clearing...";
+            clearBtn.disabled = true;
+
+            // Execute clear
+            Module.reset_transcription();
+            document.getElementById('state-transcribed').textContent = "[Transcript cleared]";
+
+            // Reset button after delay
+            setTimeout(() => {
+                clearBtn.textContent = "Clear Transcription";
+                clearBtn.disabled = false;
+            }, 500);
         }
 
         // Event Listeners

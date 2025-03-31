@@ -14,7 +14,7 @@ const std::string SYSTEM_CONTENT = "You are an AI assistant that helps users pre
                                     Please provide a great example using the STAR method.";
 
 // This could be for other system configurations (e.g., API key, model type)
-const std::string API_KEY = "";
+const std::string API_KEY = "sk-e721f7e4fe834b969e1ea5113f0e3d3f";
 const std::string GPT_MODEL_TYPE = "gpt-3.5-turbo";
 const std::string DS_GENERAL_MODEL_TYPE = "deepseek-chat";
 const std::string DS_CODING_MODEL_TYPE = "deepseek-coder";

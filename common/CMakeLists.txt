@@ -58,24 +58,6 @@ target_link_libraries(${TARGET} PRIVATE whisper ${COMMON_EXTRA_LIBS})
 set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set_target_properties(${TARGET} PROPERTIES FOLDER "libs")
 
-# common-sdl
-if (!EMSCRIPTEN)
-
-set(TARGET common-sdl)
-
-add_library(${TARGET} STATIC
-    common-sdl.h
-    common-sdl.cpp
-    )
-
-target_include_directories(${TARGET} PUBLIC  ${SDL2_INCLUDE_DIRS})
-target_link_libraries     (${TARGET} PRIVATE ${SDL2_LIBRARIES})
-
-set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
-set_target_properties(${TARGET} PROPERTIES FOLDER "libs")
-
-endif()
-
 # add json lib
 add_library(json_cpp INTERFACE)
 target_include_directories(json_cpp INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
