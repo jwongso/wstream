@@ -26,9 +26,6 @@ endif()
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-add_subdirectory(ggml)
-add_subdirectory(src)
-
 if (EMSCRIPTEN)
     set(BUILD_SHARED_LIBS_DEFAULT OFF)
 
@@ -43,9 +40,31 @@ if (EMSCRIPTEN)
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -s TOTAL_STACK=5242880")
 
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-deprecated")
-else()
 
-    add_subdirectory(stream)
+    # Add this near the top of your CMakeLists.txt, before any project() calls
+    # Set default Emscripten options
+    set(WHISPER_WASM_SINGLE_FILE ON CACHE BOOL "Embed WASM in JS file")
+    set(GGML_VULKAN OFF CACHE BOOL "Disable Vulkan for WASM")
+    set(GGML_OPENMP OFF CACHE BOOL "Disable OpenMP for WASM")
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "Force static linking for WASM")
+
+    # Disable all GPU backends
+    set(GGML_CUDA OFF CACHE BOOL "Disable CUDA for WASM")
+    set(GGML_METAL OFF CACHE BOOL "Disable Metal for WASM")
+    set(GGML_OPENCL OFF CACHE BOOL "Disable OpenCL for WASM")
+
+    # Disable CPU optimizations not available in WASM
+    set(GGML_BLAS OFF CACHE BOOL "Disable BLAS for WASM")
+    set(GGML_OPENBLAS OFF CACHE BOOL "Disable OpenBLAS for WASM")
+
+    message(STATUS "Configuring for Emscripten build")
+
+    add_subdirectory(ggml)
+    add_subdirectory(src)
+    add_subdirectory(common)
+    add_subdirectory(stream.wasm)
+
+else()
 
     string(
         APPEND opts
@@ -63,4 +82,10 @@ else()
     else()
         set(BUILD_SHARED_LIBS_DEFAULT ON)
     endif()
+
+    add_subdirectory(ggml)
+    add_subdirectory(src)
+    add_subdirectory(common)
+    add_subdirectory(stream)
+
 endif()

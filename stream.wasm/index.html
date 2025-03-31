@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whisper.WASM Streaming Demo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        #status {
+            padding: 12px;
+            margin: 15px 0;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .loading { background: #fff3cd; color: #856404; }
+        .ready { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        button {
+            padding: 10px 15px;
+            margin: 5px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        #output {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 15px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            min-height: 100px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        #model-status {
+            margin: 10px 0;
+            font-weight: bold;
+            padding: 8px;
+            border-radius: 4px;
+        }
+        .model-btn {
+            margin: 5px;
+            padding: 8px 12px;
+            background: #4a6baf;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .model-btn:hover {
+            background: #3a5a9f;
+        }
+        #download-progress {
+            margin: 10px 0;
+            font-size: 0.9em;
+            color: #666;
+        }
+        .progress-bar {
+            height: 5px;
+            background: #e9ecef;
+            border-radius: 3px;
+            margin-top: 5px;
+            overflow: hidden;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: #28a745;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        #transcription-container {
+            margin-top: 20px;
+            border-top: 1px solid #eee;
+            padding-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Whisper.WASM Streaming Demo</h1>
+        <div id="status" class="loading">Loading WebAssembly runtime...</div>
+
+        <!-- Model Selection Section -->
+        <div id="model-selection">
+            <h3>Select Whisper Model:</h3>
+            <div id="model-status">No model selected</div>
+            <div class="button-group">
+                <button class="model-btn" id="fetch-whisper-tiny-en" onclick="loadWhisper('tiny.en')">tiny.en (75 MB)</button>
+                <button class="model-btn" id="fetch-whisper-base-en" onclick="loadWhisper('base.en')">base.en (142 MB)</button>
+                <button class="model-btn" id="fetch-whisper-tiny-en-q5_1" onclick="loadWhisper('tiny-en-q5_1')">tiny.en-q5_1 (31 MB)</button>
+                <button class="model-btn" id="fetch-whisper-base-en-q5_1" onclick="loadWhisper('base-en-q5_1')">base.en-q5_1 (57 MB)</button>
+            </div>
+            <div id="download-progress">
+                <span id="fetch-whisper-progress"></span>
+            </div>
+            <div class="progress-bar">
+                <div class="progress-bar-fill" id="progress-bar-fill"></div>
+            </div>
+        </div>
+
+        <div class="button-group">
+            <button id="start" disabled>Start Recording</button>
+            <button id="stop" disabled>Stop Recording</button>
+            <button id="clear" onclick="clearCache()">Clear Cache</button>
+        </div>
+
+        <div id="output"></div>
+
+        <div id="transcription-container">
+            <h3>Live Transcription:</h3>
+            <div id="state-transcribed">[The transcribed text will be displayed here]</div>
+        </div>
+
+        <hr>
+
+        <div>
+            <h3>Troubleshooting</h3>
+            <p>The page does some heavy computations, so make sure:</p>
+            <ul>
+                <li>To use a modern web browser (e.g. Chrome, Firefox)</li>
+                <li>To use a fast desktop or laptop computer (i.e. not a mobile phone)</li>
+                <li>Your browser supports WASM <a href="https://webassembly.org/roadmap/">Fixed-width SIMD</a></li>
+            </ul>
+
+            <p>
+                <a href="https://github.com/ggerganov/whisper.cpp/tree/master/examples/stream.wasm">Source Code on GitHub</a>
+            </p>
+        </div>
+    </div>
+
+    <!-- Load WASM module -->
+    <script type="text/javascript" src="helpers.js"></script>
+    <script>
+        // Web audio context
+        var context = null;
+
+        // Audio data
+        var audio = null;
+        var audio0 = null;
+
+        // The stream instance
+        var instance = null;
+
+        // Model name
+        var model_whisper = null;
+
+        var Module = {
+            print: printTextarea,
+            printErr: printTextarea,
+            setStatus: function(text) {
+                printTextarea('js: ' + text);
+            },
+            monitorRunDependencies: function(left) {
+            },
+            preRun: function() {
+                printTextarea('js: Preparing ...');
+            },
+            postRun: function() {
+                printTextarea('js: Initialized successfully!');
+                document.getElementById('status').className = 'ready';
+                document.getElementById('status').textContent = 'WASM Runtime Ready';
+            }
+        };
+
+        // IndexedDB setup for caching
+        let dbVersion = 1
+        let dbName = 'whisper.ggerganov.com';
+        let indexedDB = window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB
+
+        function printTextarea(text) {
+            const outputEl = document.getElementById('output');
+            outputEl.textContent += text + '\n';
+            outputEl.scrollTop = outputEl.scrollHeight;
+            console.log(text);
+        }
+
+        function storeFS(fname, buf) {
+            // Write to WASM file using FS_createDataFile
+            // If the file exists, delete it
+            try {
+                Module.FS_unlink(fname);
+            } catch (e) {
+                // Ignore
+            }
+
+            Module.FS_createDataFile("/", fname, buf, true, true);
+
+            printTextarea('storeFS: stored model: ' + fname + ' size: ' + buf.length);
+
+            document.getElementById('model-status').textContent = 'Loaded "' + model_whisper + '"!';
+            document.getElementById('model-status').className = 'ready';
+
+            if (model_whisper != null) {
+                document.getElementById('start').disabled = false;
+                document.getElementById('stop').disabled = true;
+            }
+
+            // Update progress bar to 100%
+            document.getElementById('progress-bar-fill').style.width = '100%';
+        }
+
+        function loadWhisper(model) {
+            let urls = {
+                'tiny.en': 'https://whisper.ggerganov.com/ggml-model-whisper-tiny.en.bin',
+                'base.en': 'https://whisper.ggerganov.com/ggml-model-whisper-base.en.bin',
+                'tiny-en-q5_1': 'https://whisper.ggerganov.com/ggml-model-whisper-tiny.en-q5_1.bin',
+                'base-en-q5_1': 'https://whisper.ggerganov.com/ggml-model-whisper-base.en-q5_1.bin',
+            };
+
+            let sizes = {
+                'tiny.en': 75,
+                'base.en': 142,
+                'tiny-en-q5_1': 31,
+                'base-en-q5_1': 57,
+            };
+
+            let url = urls[model];
+            let dst = 'whisper.bin';
+            let size_mb = sizes[model];
+
+            model_whisper = model;
+
+            document.getElementById('fetch-whisper-tiny-en').style.display = 'none';
+            document.getElementById('fetch-whisper-base-en').style.display = 'none';
+            document.getElementById('fetch-whisper-tiny-en-q5_1').style.display = 'none';
+            document.getElementById('fetch-whisper-base-en-q5_1').style.display = 'none';
+
+            document.getElementById('model-status').textContent = 'Loading "' + model + '" ... ';
+            document.getElementById('model-status').className = 'loading';
+
+            cbProgress = function(p) {
+                let el = document.getElementById('fetch-whisper-progress');
+                el.innerHTML = Math.round(100*p) + '%';
+
+                // Update progress bar
+                document.getElementById('progress-bar-fill').style.width = Math.round(100*p) + '%';
+            };
+
+            cbCancel = function() {
+                var el;
+                el = document.getElementById('fetch-whisper-tiny-en'); if (el) el.style.display = 'inline-block';
+                el = document.getElementById('fetch-whisper-base-en'); if (el) el.style.display = 'inline-block';
+                el = document.getElementById('fetch-whisper-tiny-en-q5_1'); if (el) el.style.display = 'inline-block';
+                el = document.getElementById('fetch-whisper-base-en-q5_1'); if (el) el.style.display = 'inline-block';
+
+                el = document.getElementById('model-status'); if (el) el.textContent = 'Download cancelled';
+                el = document.getElementById('model-status'); if (el) el.className = 'error';
+
+                // Reset progress bar
+                document.getElementById('progress-bar-fill').style.width = '0%';
+            };
+
+            loadRemote(url, dst, size_mb, cbProgress, storeFS, cbCancel, printTextarea);
+        }
+
+        // Microphone handling
+        const kSampleRate = 16000;
+        const kRestartRecording_s = 120;
+        const kIntervalAudio_ms = 5000; // Pass the recorded audio to the C++ instance at this rate
+
+        var mediaRecorder = null;
+        var doRecording = false;
+        var startTime = 0;
+
+        window.AudioContext = window.AudioContext || window.webkitAudioContext;
+        window.OfflineAudioContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+
+        function stopRecording() {
+            Module.set_status("paused");
+            doRecording = false;
+            audio0 = null;
+            audio = null;
+            context = null;
+
+            if (mediaRecorder) {
+                mediaRecorder.stop();
+                mediaRecorder.stream.getTracks().forEach(track => track.stop());
+                mediaRecorder = null;
+            }
+
+            document.getElementById('start').disabled = false;
+            document.getElementById('stop').disabled = true;
+            document.getElementById('status').textContent = "Ready";
+        }
+
+        function startRecording() {
+            if (!context) {
+                context = new AudioContext({
+                    sampleRate: kSampleRate,
+                    channelCount: 1,
+                    echoCancellation: false,
+                    autoGainControl: true,
+                    noiseSuppression: true,
+                });
+            }
+
+            Module.set_status("");
+            document.getElementById('status').textContent = "Recording...";
+
+            document.getElementById('start').disabled = true;
+            document.getElementById('stop').disabled = false;
+
+            doRecording = true;
+            startTime = Date.now();
+
+            var chunks = [];
+            var stream = null;
+
+            navigator.mediaDevices.getUserMedia({audio: true, video: false})
+                .then(function(s) {
+                    stream = s;
+                    mediaRecorder = new MediaRecorder(stream);
+                    mediaRecorder.ondataavailable = function(e) {
+                        chunks.push(e.data);
+
+                        var blob = new Blob(chunks, { 'type': 'audio/ogg; codecs=opus' });
+                        var reader = new FileReader();
+
+                        reader.onload = function(event) {
+                            var buf = new Uint8Array(reader.result);
+
+                            if (!context) {
+                                return;
+                            }
+                            context.decodeAudioData(buf.buffer, function(audioBuffer) {
+                                var offlineContext = new OfflineAudioContext(audioBuffer.numberOfChannels, audioBuffer.length, audioBuffer.sampleRate);
+                                var source = offlineContext.createBufferSource();
+                                source.buffer = audioBuffer;
+                                source.connect(offlineContext.destination);
+                                source.start(0);
+
+                                offlineContext.startRendering().then(function(renderedBuffer) {
+                                    audio = renderedBuffer.getChannelData(0);
+
+                                    var audioAll = new Float32Array(audio0 == null ? audio.length : audio0.length + audio.length);
+                                    if (audio0 != null) {
+                                        audioAll.set(audio0, 0);
+                                    }
+                                    audioAll.set(audio, audio0 == null ? 0 : audio0.length);
+
+                                    if (instance) {
+                                        Module.set_audio(instance, audioAll);
+                                    }
+                                });
+                            }, function(e) {
+                                audio = null;
+                            });
+                        }
+
+                        reader.readAsArrayBuffer(blob);
+                    };
+
+                    mediaRecorder.onstop = function(e) {
+                        if (doRecording) {
+                            setTimeout(function() {
+                                startRecording();
+                            });
+                        }
+                    };
+
+                    mediaRecorder.start(kIntervalAudio_ms);
+                })
+                .catch(function(err) {
+                    printTextarea('js: error getting audio stream: ' + err);
+                    document.getElementById('status').textContent = "Error: " + err;
+                    document.getElementById('status').className = "error";
+
+                    document.getElementById('start').disabled = false;
+                    document.getElementById('stop').disabled = true;
+                });
+
+            var interval = setInterval(function() {
+                if (!doRecording) {
+                    clearInterval(interval);
+                    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                        mediaRecorder.stop();
+                        stream.getTracks().forEach(function(track) {
+                            track.stop();
+                        });
+                    }
+
+                    document.getElementById('start').disabled = false;
+                    document.getElementById('stop').disabled = true;
+
+                    mediaRecorder = null;
+                }
+
+                // If audio length is more than kRestartRecording_s seconds, restart recording
+                if (audio != null && audio.length > kSampleRate*kRestartRecording_s) {
+                    if (doRecording) {
+                        clearInterval(interval);
+                        audio0 = audio;
+                        audio = null;
+                        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                            mediaRecorder.stop();
+                            stream.getTracks().forEach(function(track) {
+                                track.stop();
+                            });
+                        }
+                    }
+                }
+            }, 100);
+        }
+
+        // Transcription handling
+        var nLines = 0;
+        var intervalUpdate = null;
+        var transcribedAll = '';
+
+        function onStart() {
+            if (!instance) {
+                instance = Module.init('whisper.bin');
+
+                if (instance) {
+                    printTextarea("js: whisper initialized, instance: " + instance);
+                }
+            }
+
+            if (!instance) {
+                printTextarea("js: failed to initialize whisper");
+                document.getElementById('status').textContent = "Error: Failed to initialize Whisper";
+                document.getElementById('status').className = "error";
+                return;
+            }
+
+            startRecording();
+
+            intervalUpdate = setInterval(function() {
+                var transcribed = Module.get_transcribed();
+
+                if (transcribed != null && transcribed.length > 1) {
+                    transcribedAll += transcribed + '<br>';
+                    nLines++;
+
+                    // If more than 10 lines, remove the first line
+                    if (nLines > 10) {
+                        var i = transcribedAll.indexOf('<br>');
+                        if (i > 0) {
+                            transcribedAll = transcribedAll.substring(i + 4);
+                            nLines--;
+                        }
+                    }
+                }
+
+                document.getElementById('status').innerHTML = Module.get_status();
+                document.getElementById('state-transcribed').innerHTML = transcribedAll;
+            }, 100);
+        }
+
+        function clearCache() {
+            if (window.indexedDB) {
+                indexedDB.deleteDatabase('whisper.ggerganov.com');
+                printTextarea("Cache cleared. Please reload the page.");
+                document.getElementById('status').textContent = "Cache cleared. Please reload the page.";
+            } else {
+                printTextarea("IndexedDB not supported - cannot clear cache");
+                document.getElementById('status').textContent = "Error: IndexedDB not supported";
+                document.getElementById('status').className = "error";
+            }
+        }
+
+        // Event Listeners
+        document.getElementById('start').addEventListener('click', onStart);
+        document.getElementById('stop').addEventListener('click', stopRecording);
+    </script>
+    <script type="text/javascript" src="libstream.js"></script>
+</body>
+</html>
