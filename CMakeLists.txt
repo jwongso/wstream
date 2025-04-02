@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.14)
-project("hyni" C CXX)
-project("hyni" VERSION 0.0.1)
+project("wstream" C CXX)
+project("wstream" VERSION 0.0.1)
 include(CheckIncludeFileCXX)
 
 set(SOVERSION 1)

@@ -23,13 +23,12 @@ set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set_target_properties(${TARGET} PROPERTIES FOLDER "libs")
 
 set(TARGET wstream)
-add_executable(${TARGET} stream.cpp chatapi.cpp chatapi.h config.h)
+add_executable(${TARGET} stream.cpp)
 
 target_link_libraries(${TARGET} PRIVATE
     common
     common-sdl
     whisper
-    curl
     nlohmann_json::nlohmann_json
     Boost::system
     ${CMAKE_THREAD_LIBS_INIT})

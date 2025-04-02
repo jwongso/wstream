@@ -1,8 +1,6 @@
-#include "config.h"
-#include "whisper.h"
 #include "common.h"
+#include "whisper.h"
 #include "common-sdl.h"
-#include "chatapi.h"
 #include <iostream>
 #include <set>
 #include <termios.h>
@@ -22,7 +20,6 @@ namespace http = beast::http;
 namespace websocket = beast::websocket;
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
-using namespace hyni;
 
 // Global flag for pause/resume
 std::atomic<bool> is_running(true);
@@ -61,43 +58,8 @@ public:
     }
 };
 
-void process_prompt(const std::string& combined_transcription, bool is_star, ChatAPI& chatapi, std::shared_ptr<shared_state> state) {
-    // Create a JSON message for the prompt
-    nlohmann::json prompt_message = {
-        {"type", "prompt"},
-        {"content", combined_transcription}
-    };
-
-    // Print to console
-    std::cout << " -------------------------- " << std::endl
-              << "Prompt: " << combined_transcription << std::endl
-              << " -------------------------- " << std::endl;
-
-    // Send the prompt message to WebSocket clients
-    state->broadcast(prompt_message.dump());
-
-    // Send the combined transcription to the ChatAPI
-    std::string response = chatapi.sendMessage(combined_transcription,
-                                               is_star ? ChatAPI::QuestionType::AmazonBehavioral : ChatAPI::QuestionType::General);
-    std::string reply = chatapi.getAssistantReply(response);
-
-    // Create a JSON message for the assistant's response
-    nlohmann::json response_message = {
-        {"type", "response"},
-        {"content", reply}
-    };
-
-    // Print to console
-    std::cout << " -------------------------- " << std::endl
-              << "Assistant: " << reply << std::endl
-              << " -------------------------- " << std::endl;
-
-    // Send the response message to WebSocket clients
-    state->broadcast(response_message.dump());
-}
-
 // WebSocket session handler
-void do_session(tcp::socket socket, std::shared_ptr<shared_state> state, ChatAPI& chatapi) {
+void do_session(tcp::socket socket, std::shared_ptr<shared_state> state) {
     websocket::stream<tcp::socket> ws{std::move(socket)};
     try {
         ws.accept();
@@ -114,12 +76,7 @@ void do_session(tcp::socket socket, std::shared_ptr<shared_state> state, ChatAPI
             nlohmann::json json_message = nlohmann::json::parse(message);
 
             // Check if the message is a prompt
-            if (json_message["type"] == "prompt") {
-                std::string combined_transcription = json_message["content"];
-                bool is_star = json_message["star"];
-
-                process_prompt(combined_transcription, is_star, chatapi, state);
-            } else if (json_message["type"] == "reset") {
+            if (json_message["type"] == "reset") {
                 // Handle reset command
                 std::string content = json_message["content"];
                 if (content == "clear") {
@@ -140,7 +97,7 @@ void do_session(tcp::socket socket, std::shared_ptr<shared_state> state, ChatAPI
 }
 
 // WebSocket server
-void websocket_server(std::shared_ptr<shared_state> state, ChatAPI& chatapi) {
+void websocket_server(std::shared_ptr<shared_state> state) {
     try {
         net::io_context ioc;
         tcp::acceptor acceptor{ioc, {tcp::v4(), 8080}};
@@ -151,57 +108,13 @@ void websocket_server(std::shared_ptr<shared_state> state, ChatAPI& chatapi) {
             tcp::socket socket{ioc};
             acceptor.accept(socket);
             if (!is_running) break;
-            std::thread{do_session, std::move(socket), state, std::ref(chatapi)}.detach();
+            std::thread{do_session, std::move(socket), state}.detach();
         }
 
         ioc.stop();
     } catch (std::exception const& e) {
         std::cerr << "WebSocket Server Error: " << e.what() << std::endl;
     }
-}
-
-// Function to listen for key presses
-void key_listener(ChatAPI& chatapi, audio_async& audio, std::shared_ptr<shared_state> state) {
-    struct termios oldt, newt;
-    tcgetattr(STDIN_FILENO, &oldt);
-    newt = oldt;
-    newt.c_lflag &= ~(ICANON | ECHO);
-    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
-
-    while (is_running) {
-        fd_set fds;
-        FD_ZERO(&fds);
-        FD_SET(STDIN_FILENO, &fds);
-        struct timeval timeout = {0, 100000};
-
-        int ret = select(STDIN_FILENO + 1, &fds, NULL, NULL, &timeout);
-        if (ret > 0 && FD_ISSET(STDIN_FILENO, &fds) && is_running) {
-            char ch = getchar();
-            if (ch == 's') {
-                // Check if a WebSocket client is connected
-                if (state->is_client_connected()) {
-                    std::cout << "WebSocket client is connected. Waiting for prompt from client..." << std::endl;
-                } else {
-                    // No WebSocket client connected, proceed with keypress behavior
-                    if (!transcriptions.empty()) {
-                        std::string combined_transcription;
-                        for (const auto& text : transcriptions) {
-                            combined_transcription += text + " ";
-                        }
-
-                        // Use the helper function to process the prompt
-                        process_prompt(combined_transcription, false, chatapi, state);
-
-                        // Clear the transcriptions vector and audio buffer
-                        transcriptions.clear();
-                        audio.clear();
-                    }
-                }
-            }
-        }
-    }
-
-    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);  // Restore terminal settings
 }
 
 // Function to remove partial bracketed text (e.g., [inaudible], [ Background Conversations ])
@@ -273,15 +186,9 @@ int main() {
     }
     audio.resume();
 
-    // Initialize ChatAPI
-    ChatAPI chatapi(DS_API_URL);
-
     // Start the WebSocket server
     auto state = std::make_shared<shared_state>();
-    std::thread ws_thread(websocket_server, state, std::ref(chatapi));
-
-    // Start the key listener thread
-    std::thread key_thread(key_listener, std::ref(chatapi), std::ref(audio), state);
+    std::thread ws_thread(websocket_server, state);
 
     // Main loop
     std::vector<float> pcmf32(WHISPER_SAMPLE_RATE * 15, 0.0f); // 15 seconds of audio
@@ -371,7 +278,6 @@ int main() {
     SDL_Quit();
     is_running = false;
     if (ws_thread.joinable()) ws_thread.join();
-    if (key_thread.joinable()) key_thread.join();
 
     whisper_free(ctx);
 
