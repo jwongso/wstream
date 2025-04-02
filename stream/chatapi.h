@@ -18,7 +18,7 @@ public:
     };
 
     enum class QuestionType {
-        AmazonBehavioral,  // STAR-based Amazon behavioral question
+        AmazonBehavioral,  // STAR-based Amazon behavioral question (with system user or prefixed prompt)
         General            // LeetCode-style coding or system design question
     };
 
@@ -26,7 +26,7 @@ public:
 
     std::string sendMessage(const std::string& message,
                             QuestionType type = ChatAPI::QuestionType::General,
-                            int max_tokens = 1200,
+                            int max_tokens = 1500,
                             double temperature = 0.7);
 
     std::string getAssistantReply(const std::string& jsonResponse);
