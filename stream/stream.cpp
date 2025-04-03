@@ -50,10 +50,19 @@ public:
     }
 
     void broadcast(const std::string& message) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        for (auto ws : m_connections) {
-            ws->text(true);
-            ws->write(net::buffer(message));
+        std::vector<websocket::stream<tcp::socket>*> clients;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            clients.assign(m_connections.begin(), m_connections.end());
+        }
+
+        for (auto ws : clients) {
+            try {
+                ws->text(true);
+                ws->write(net::buffer(message));
+            } catch (const std::exception& e) {
+                std::cerr << "WebSocket Broadcast Error: " << e.what() << std::endl;
+            }
         }
     }
 };
@@ -119,54 +128,29 @@ void websocket_server(std::shared_ptr<shared_state> state) {
 
 // Function to remove partial bracketed text (e.g., [inaudible], [ Background Conversations ])
 void remove_bracketed_text(std::string& text) {
-    size_t write_pos = 0;
     bool in_bracket = false;
-
-    for (size_t read_pos = 0; read_pos < text.size(); ++read_pos) {
-        const char c = text[read_pos];
-
-        if (c == '[') {
-            in_bracket = true;
-            continue;
-        }
-
-        if (in_bracket) {
-            if (c == ']') in_bracket = false;
-            continue;
-        }
-
-        // Only copy if positions differ
-        if (write_pos != read_pos) {
-            text[write_pos] = c;
-        }
-        write_pos++;
-    }
-
-    text.resize(write_pos);
+    text.erase(std::remove_if(text.begin(), text.end(), [&in_bracket](char c) {
+                   if (c == '[') in_bracket = true;
+                   if (c == ']') {
+                       in_bracket = false;
+                       return true; // Remove ']'
+                   }
+                   return in_bracket;
+               }),
+    text.end());
 }
 
 // Function to trim leading and trailing whitespace
 void lrtrim(std::string &s) {
-    static constexpr const char* whitespace = " \t\n\r\f\v";
-
-    // Left trim
+    const char* whitespace = " \t\n\r\f\v";
     size_t start = s.find_first_not_of(whitespace);
     if (start == std::string::npos) {
         s.clear();
         return;
     }
-
-    // Right trim
     size_t end = s.find_last_not_of(whitespace);
-
-    // In-place modification
-    if (start != 0 || end != s.length() - 1) {
-        if (end != std::string::npos) {
-            s = s.substr(start, end - start + 1);
-        } else {
-            s = s.substr(start);
-        }
-    }
+    s.erase(end + 1);
+    s.erase(0, start);
 }
 
 int main() {
@@ -191,7 +175,8 @@ int main() {
     std::thread ws_thread(websocket_server, state);
 
     // Main loop
-    std::vector<float> pcmf32(WHISPER_SAMPLE_RATE * 15, 0.0f); // 15 seconds of audio
+    std::vector<float> pcmf32;
+    pcmf32.reserve(WHISPER_SAMPLE_RATE * 15);
 
     // VAD parameters
     float vad_thold = 0.85f; // Increase to reduce sensitivity
