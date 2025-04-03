@@ -128,16 +128,35 @@ void websocket_server(std::shared_ptr<shared_state> state) {
 
 // Function to remove partial bracketed text (e.g., [inaudible], [ Background Conversations ])
 void remove_bracketed_text(std::string& text) {
+    char* read_ptr = text.data();
+    char* write_ptr = text.data();
     bool in_bracket = false;
-    text.erase(std::remove_if(text.begin(), text.end(), [&in_bracket](char c) {
-                   if (c == '[') in_bracket = true;
-                   if (c == ']') {
-                       in_bracket = false;
-                       return true; // Remove ']'
-                   }
-                   return in_bracket;
-               }),
-    text.end());
+    bool in_paren = false;
+
+    for (; *read_ptr; ++read_ptr) {
+        if (!in_bracket && !in_paren) {
+            if (*read_ptr == '[') {
+                in_bracket = true;
+                continue;
+            }
+            if (*read_ptr == '(') {
+                in_paren = true;
+                continue;
+            }
+            *write_ptr++ = *read_ptr;
+        } else {
+            if (in_bracket && *read_ptr == ']') {
+                in_bracket = false;
+                continue;
+            }
+            if (in_paren && *read_ptr == ')') {
+                in_paren = false;
+                continue;
+            }
+        }
+    }
+    *write_ptr = '\0';
+    text.resize(write_ptr - text.data());
 }
 
 // Function to trim leading and trailing whitespace
