@@ -180,7 +180,7 @@ void lrtrim(std::string &s) {
 int main() {
     // Initialize whisper context
     struct whisper_context_params cparams = whisper_context_default_params();
-    struct whisper_context* ctx = whisper_init_from_file_with_params("models/ggml-medium.en.bin", cparams);
+    struct whisper_context* ctx = whisper_init_from_file_with_params("models/ggml-small.en.bin", cparams);
     if (!ctx) {
         std::cerr << "Failed to initialize Whisper context.\n";
         return 1;
