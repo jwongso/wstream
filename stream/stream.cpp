@@ -13,8 +13,9 @@
 #include <boost/beast/websocket.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <nlohmann/json.hpp>
+#include <filesystem>
 
-
+namespace fs = std::filesystem;
 namespace beast = boost::beast;
 namespace http = beast::http;
 namespace websocket = beast::websocket;
@@ -177,10 +178,24 @@ void lrtrim(std::string &s) {
     s.erase(0, start);
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     // Initialize whisper context
+    std::string model_path = "models/ggml-medium.en-q5_0.bin";
+
+    // Check if a custom path was provided
+    if (argc > 1) {
+        std::string user_path = argv[1];
+
+        // Validate the path
+        if (fs::exists(user_path)) {
+            model_path = user_path;
+        } else {
+            std::cerr << "Warning: Provided model path '" << user_path << "' does not exist. Falling back to default.\n";
+        }
+    }
+
     struct whisper_context_params cparams = whisper_context_default_params();
-    struct whisper_context* ctx = whisper_init_from_file_with_params("models/ggml-small.en.bin", cparams);
+    struct whisper_context* ctx = whisper_init_from_file_with_params(model_path.c_str(), cparams);
     if (!ctx) {
         std::cerr << "Failed to initialize Whisper context.\n";
         return 1;
