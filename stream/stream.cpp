@@ -180,7 +180,7 @@ void lrtrim(std::string &s) {
 
 int main(int argc, char* argv[]) {
     // Initialize whisper context
-    std::string model_path = "models/ggml-medium.en-q5_0.bin";
+    std::string model_path = "models/ggml-small.en-q5_1.bin";
 
     // Check if a custom path was provided
     if (argc > 1) {
