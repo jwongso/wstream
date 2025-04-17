@@ -24,10 +24,9 @@ using tcp = net::ip::tcp;
 
 // Global flag for pause/resume
 std::atomic<bool> is_running(true);
-std::atomic<bool> is_cleared(false);
 
-// Global vector to store transcriptions
-std::vector<std::string> transcriptions;
+// Store last transcription
+std::string last_transcription;
 
 // Shared state for WebSocket server
 class shared_state {
@@ -89,9 +88,6 @@ void do_session(tcp::socket socket, std::shared_ptr<shared_state> state) {
             if (json_message["type"] == "reset") {
                 // Handle reset command
                 std::string content = json_message["content"];
-                if (content == "clear") {
-                    is_cleared = true;
-                }
             }
         }
     } catch (beast::system_error const& se) {
@@ -178,6 +174,34 @@ void lrtrim(std::string &s) {
     s.erase(0, start);
 }
 
+// Calculate Levenshtein distance between two strings
+float levenshtein_distance(const std::string& s1, const std::string& s2) {
+    const size_t len1 = s1.size();
+    const size_t len2 = s2.size();
+    std::vector<std::vector<size_t>> d(len1 + 1, std::vector<size_t>(len2 + 1));
+
+    for (size_t i = 0; i <= len1; ++i) d[i][0] = i;
+    for (size_t j = 0; j <= len2; ++j) d[0][j] = j;
+
+    for (size_t i = 1; i <= len1; ++i) {
+        for (size_t j = 1; j <= len2; ++j) {
+            size_t cost = (s1[i - 1] == s2[j - 1]) ? 0 : 1;
+            d[i][j] = std::min({d[i - 1][j] + 1,      // Deletion
+                                d[i][j - 1] + 1,      // Insertion
+                                d[i - 1][j - 1] + cost}); // Substitution
+        }
+    }
+
+    return static_cast<float>(d[len1][len2]);
+}
+
+// Calculate similarity score (0 = identical, 1 = completely different)
+float string_similarity(const std::string& s1, const std::string& s2) {
+    if (s1.empty() || s2.empty()) return 1.0f;
+    float max_len = static_cast<float>(std::max(s1.size(), s2.size()));
+    return levenshtein_distance(s1, s2) / max_len;
+}
+
 int main(int argc, char* argv[]) {
     // Initialize whisper context
     std::string model_path = "models/ggml-medium.en-q5_0.bin";
@@ -195,6 +219,7 @@ int main(int argc, char* argv[]) {
     }
 
     struct whisper_context_params cparams = whisper_context_default_params();
+    cparams.use_gpu = true;
     struct whisper_context* ctx = whisper_init_from_file_with_params(model_path.c_str(), cparams);
     if (!ctx) {
         std::cerr << "Failed to initialize Whisper context.\n";
@@ -202,8 +227,9 @@ int main(int argc, char* argv[]) {
     }
 
     // Initialize audio capture
-    audio_async audio(30000); // 10-second buffer (to accommodate 30-second chunks)
-    if (!audio.init(-1, WHISPER_SAMPLE_RATE)) {
+    audio_async audio(10000); // 10-second buffer (to accommodate 30-second chunks)
+
+    if (!audio.init(0, WHISPER_SAMPLE_RATE)) {
         std::cerr << "Failed to initialize audio capture.\n";
         return 1;
     }
@@ -215,11 +241,11 @@ int main(int argc, char* argv[]) {
 
     // Main loop
     std::vector<float> pcmf32;
-    pcmf32.reserve(WHISPER_SAMPLE_RATE * 15);
+    pcmf32.reserve(WHISPER_SAMPLE_RATE * 30);
 
     // VAD parameters
     float vad_thold = 0.85f; // Increase to reduce sensitivity
-    float freq_thold = 100.0f; // Frequency threshold for VAD
+    float freq_thold = 250.0f; // Frequency threshold for VAD
 
     while (is_running) {
         is_running = sdl_poll_events();
@@ -227,13 +253,9 @@ int main(int argc, char* argv[]) {
             break;
         }
 
-        if (is_cleared) {
-            pcmf32.clear();
-            is_cleared = false;
-        }
-
         // Capture audio
-        audio.get(15000, pcmf32); // Get 30 seconds of audio
+        audio.get(5000, pcmf32); // Get 5 seconds of audio
+        if (pcmf32.empty()) continue;
 
         // Run VAD to check for speech activity
         if (::vad_simple(pcmf32, WHISPER_SAMPLE_RATE, 1000, vad_thold, freq_thold, false)) {
@@ -246,7 +268,7 @@ int main(int argc, char* argv[]) {
             wparams.max_tokens = 0;
             wparams.no_timestamps = true;
             wparams.n_threads = std::thread::hardware_concurrency();
-            wparams.temperature = 0.1;
+            wparams.temperature = 0.0f;
             wparams.greedy.best_of = 1;
             wparams.single_segment = true;
 
@@ -277,21 +299,20 @@ int main(int argc, char* argv[]) {
                     continue;
                 }
 
-                // Extract new content by comparing with the previous transcription
-                const std::string new_content = current_transcription;
+                if (last_transcription.empty() ||
+                    string_similarity(last_transcription, current_transcription) > 0.1f) {
 
-                // Add the new content to the transcriptions vector if it's not empty
-                if (!new_content.empty()) {
-                    transcriptions.push_back(new_content);
-                    std::cout << new_content << std::endl; // Print the new content
+                    std::cout << current_transcription << std::endl; // Print the new content
 
                     nlohmann::json transcribe_message = {
                         {"type", "transcribe"},
-                        {"content", new_content}
+                        {"content", current_transcription}
                     };
 
                     // Broadcast the new content to WebSocket clients
                     state->broadcast(transcribe_message.dump());
+
+                    last_transcription = current_transcription;
                 }
             }
         }
