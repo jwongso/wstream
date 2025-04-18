@@ -229,7 +229,7 @@ int main(int argc, char* argv[]) {
     // Initialize audio capture
     audio_async audio(10000); // 10-second buffer (to accommodate 30-second chunks)
 
-    if (!audio.init(0, WHISPER_SAMPLE_RATE)) {
+    if (!audio.init(-1, WHISPER_SAMPLE_RATE)) {
         std::cerr << "Failed to initialize audio capture.\n";
         return 1;
     }
