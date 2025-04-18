@@ -220,14 +220,27 @@ int main(int argc, char* argv[]) {
 
     struct whisper_context_params cparams = whisper_context_default_params();
     cparams.use_gpu = true;
+    cparams.flash_attn = false;
+
     struct whisper_context* ctx = whisper_init_from_file_with_params(model_path.c_str(), cparams);
     if (!ctx) {
         std::cerr << "Failed to initialize Whisper context.\n";
         return 1;
     }
 
+    const int step_ms = 3000;
+    const int length_ms = 5000;
+    const int keep_ms = 200;
+    const int n_samples_30s  = (1e-3*30000.0)*WHISPER_SAMPLE_RATE;
+    const int n_samples_len  = (1e-3*length_ms)*WHISPER_SAMPLE_RATE;
+    const int n_samples_step = (1e-3*step_ms)*WHISPER_SAMPLE_RATE;
+    const int n_samples_keep = (1e-3*keep_ms)*WHISPER_SAMPLE_RATE;
+    std::vector<float> pcmf32(n_samples_30s, 0.0f);
+    std::vector<float> pcmf32_new(n_samples_30s, 0.0f);
+    std::vector<float> pcmf32_old;
+
     // Initialize audio capture
-    audio_async audio(10000); // 10-second buffer (to accommodate 30-second chunks)
+    audio_async audio(10000);
 
     if (!audio.init(-1, WHISPER_SAMPLE_RATE)) {
         std::cerr << "Failed to initialize audio capture.\n";
@@ -239,14 +252,6 @@ int main(int argc, char* argv[]) {
     auto state = std::make_shared<shared_state>();
     std::thread ws_thread(websocket_server, state);
 
-    // Main loop
-    std::vector<float> pcmf32;
-    pcmf32.reserve(WHISPER_SAMPLE_RATE * 30);
-
-    // VAD parameters
-    float vad_thold = 0.85f; // Increase to reduce sensitivity
-    float freq_thold = 250.0f; // Frequency threshold for VAD
-
     while (is_running) {
         is_running = sdl_poll_events();
         if (!is_running) {
@@ -254,68 +259,106 @@ int main(int argc, char* argv[]) {
         }
 
         // Capture audio
-        audio.get(5000, pcmf32); // Get 5 seconds of audio
-        if (pcmf32.empty()) continue;
+        while (true) {
+            // handle Ctrl + C
+            is_running = sdl_poll_events();
+            if (!is_running) {
+                break;
+            }
+            audio.get(step_ms, pcmf32_new);
 
-        // Run VAD to check for speech activity
-        if (::vad_simple(pcmf32, WHISPER_SAMPLE_RATE, 1000, vad_thold, freq_thold, false)) {
-            // Run inference only if speech is detected
-            whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-            wparams.print_progress = false;
-            wparams.print_realtime = false;
-            wparams.no_context = true; // Disable context carryover
-            wparams.language = "en";
-            wparams.max_tokens = 0;
-            wparams.no_timestamps = true;
-            wparams.n_threads = std::thread::hardware_concurrency();
-            wparams.temperature = 0.0f;
-            wparams.greedy.best_of = 1;
-            wparams.single_segment = true;
+            if ((int) pcmf32_new.size() > 2*n_samples_step) {
+                fprintf(stderr, "\n\n%s: WARNING: cannot process audio fast enough, dropping audio ...\n\n", __func__);
+                audio.clear();
+                continue;
+            }
 
-            if (whisper_full(ctx, wparams, pcmf32.data(), pcmf32.size()) != 0) {
-                std::cerr << "Failed to process audio.\n";
+            if ((int) pcmf32_new.size() >= n_samples_step) {
+                audio.clear();
                 break;
             }
 
-            // Get the latest transcription
-            const int n_segments = whisper_full_n_segments(ctx);
-            if (n_segments > 0) {
-                std::string current_transcription;
-                for (int i = 0; i < n_segments; ++i) {
-                    const char* text = whisper_full_get_segment_text(ctx, i);
-                    if (text) {
-                        current_transcription += text;
-                    }
-                }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
 
-                // Remove partial bracketed text (e.g., [inaudible], [ Background Conversations ])
-                remove_bracketed_text(current_transcription);
+        const int n_samples_new = pcmf32_new.size();
+        // take up to params.length_ms audio from previous iteration
+        const int n_samples_take = std::min((int) pcmf32_old.size(), std::max(0, n_samples_keep + n_samples_len - n_samples_new));
 
-                // Trim leading and trailing whitespace
-                lrtrim(current_transcription);
+        pcmf32.resize(n_samples_new + n_samples_take);
 
-                // Skip if the transcription is empty after cleaning
-                if (current_transcription.empty()) {
-                    continue;
-                }
+        for (int i = 0; i < n_samples_take; i++) {
+            pcmf32[i] = pcmf32_old[pcmf32_old.size() - n_samples_take + i];
+        }
 
-                if (last_transcription.empty() ||
-                    string_similarity(last_transcription, current_transcription) > 0.1f) {
+        memcpy(pcmf32.data() + n_samples_take, pcmf32_new.data(), n_samples_new*sizeof(float));
 
-                    std::cout << current_transcription << std::endl; // Print the new content
+        pcmf32_old = pcmf32;
 
-                    nlohmann::json transcribe_message = {
-                        {"type", "transcribe"},
-                        {"content", current_transcription}
-                    };
+        if (pcmf32.empty()) continue;
 
-                    // Broadcast the new content to WebSocket clients
-                    state->broadcast(transcribe_message.dump());
+        // Run inference only if speech is detected
+        whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+        wparams.print_progress = false;
+        wparams.print_realtime = false;
+        wparams.no_context = true; // Disable context carryover
+        wparams.language = "en";
+        wparams.max_tokens = 32;
+        wparams.no_timestamps = true;
+        wparams.n_threads = std::min(static_cast<int32_t>(std::thread::hardware_concurrency()/2), 10);
+        wparams.temperature = 0.0f;
+        wparams.greedy.best_of = 1;
+        wparams.single_segment = true;
+        wparams.audio_ctx = 0;
+        wparams.prompt_tokens = nullptr;
+        wparams.prompt_n_tokens = 0;
 
-                    last_transcription = current_transcription;
+        if (whisper_full(ctx, wparams, pcmf32.data(), pcmf32.size()) != 0) {
+            std::cerr << "Failed to process audio.\n";
+            break;
+        }
+
+        // Get the latest transcription
+        const int n_segments = whisper_full_n_segments(ctx);
+        if (n_segments > 0) {
+            std::string current_transcription;
+            for (int i = 0; i < n_segments; ++i) {
+                const char* text = whisper_full_get_segment_text(ctx, i);
+                if (text) {
+                    current_transcription += text;
                 }
             }
+
+            // Remove partial bracketed text (e.g., [inaudible], [ Background Conversations ])
+            remove_bracketed_text(current_transcription);
+
+            // Trim leading and trailing whitespace
+            lrtrim(current_transcription);
+
+            // Skip if the transcription is empty after cleaning
+            if (current_transcription.empty()) {
+                continue;
+            }
+
+            if (last_transcription.empty() ||
+                string_similarity(last_transcription, current_transcription) > 0.1f) {
+
+                std::cout << current_transcription << std::endl; // Print the new content
+
+                nlohmann::json transcribe_message = {
+                    {"type", "transcribe"},
+                    {"content", current_transcription}
+                };
+
+                // Broadcast the new content to WebSocket clients
+                state->broadcast(transcribe_message.dump());
+
+                last_transcription = current_transcription;
+            }
         }
+
+        // keep part of the audio for next iteration to try to mitigate word boundary issues
+        pcmf32_old = std::vector<float>(pcmf32.end() - n_samples_keep, pcmf32.end());
     }
 
     std::cout << "CTRL-C again to exit..." << std::endl;
