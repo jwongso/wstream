@@ -304,35 +304,35 @@ namespace grammar_parser {
         }
     }
 
-    // static void print_rule_binary(FILE * file, const std::vector<whisper_grammar_element> & rule) {
-    //     for (auto elem : rule) {
-    //         switch (elem.type) {
-    //             case WHISPER_GRETYPE_END:            fprintf(file, "END");            break;
-    //             case WHISPER_GRETYPE_ALT:            fprintf(file, "ALT");            break;
-    //             case WHISPER_GRETYPE_RULE_REF:       fprintf(file, "RULE_REF");       break;
-    //             case WHISPER_GRETYPE_CHAR:           fprintf(file, "CHAR");           break;
-    //             case WHISPER_GRETYPE_CHAR_NOT:       fprintf(file, "CHAR_NOT");       break;
-    //             case WHISPER_GRETYPE_CHAR_RNG_UPPER: fprintf(file, "CHAR_RNG_UPPER"); break;
-    //             case WHISPER_GRETYPE_CHAR_ALT:       fprintf(file, "CHAR_ALT");       break;
-    //         }
-    //         switch (elem.type) {
-    //             case WHISPER_GRETYPE_END:
-    //             case WHISPER_GRETYPE_ALT:
-    //             case WHISPER_GRETYPE_RULE_REF:
-    //                 fprintf(file, "(%u) ", elem.value);
-    //                 break;
-    //             case WHISPER_GRETYPE_CHAR:
-    //             case WHISPER_GRETYPE_CHAR_NOT:
-    //             case WHISPER_GRETYPE_CHAR_RNG_UPPER:
-    //             case WHISPER_GRETYPE_CHAR_ALT:
-    //                 fprintf(file, "(\"");
-    //                 print_grammar_char(file, elem.value);
-    //                 fprintf(file, "\") ");
-    //                 break;
-    //         }
-    //     }
-    //     fprintf(file, "\n");
-    // }
+    static void print_rule_binary(FILE * file, const std::vector<whisper_grammar_element> & rule) {
+        for (auto elem : rule) {
+            switch (elem.type) {
+                case WHISPER_GRETYPE_END:            fprintf(file, "END");            break;
+                case WHISPER_GRETYPE_ALT:            fprintf(file, "ALT");            break;
+                case WHISPER_GRETYPE_RULE_REF:       fprintf(file, "RULE_REF");       break;
+                case WHISPER_GRETYPE_CHAR:           fprintf(file, "CHAR");           break;
+                case WHISPER_GRETYPE_CHAR_NOT:       fprintf(file, "CHAR_NOT");       break;
+                case WHISPER_GRETYPE_CHAR_RNG_UPPER: fprintf(file, "CHAR_RNG_UPPER"); break;
+                case WHISPER_GRETYPE_CHAR_ALT:       fprintf(file, "CHAR_ALT");       break;
+            }
+            switch (elem.type) {
+                case WHISPER_GRETYPE_END:
+                case WHISPER_GRETYPE_ALT:
+                case WHISPER_GRETYPE_RULE_REF:
+                    fprintf(file, "(%u) ", elem.value);
+                    break;
+                case WHISPER_GRETYPE_CHAR:
+                case WHISPER_GRETYPE_CHAR_NOT:
+                case WHISPER_GRETYPE_CHAR_RNG_UPPER:
+                case WHISPER_GRETYPE_CHAR_ALT:
+                    fprintf(file, "(\"");
+                    print_grammar_char(file, elem.value);
+                    fprintf(file, "\") ");
+                    break;
+            }
+        }
+        fprintf(file, "\n");
+    }
 
     static void print_rule(
             FILE     * file,
