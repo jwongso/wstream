@@ -11,6 +11,12 @@
 
 #include "wstream_app.h"
 #include <iostream>
+#include <thread>
+#include <chrono>
+#include <cstdlib>
+
+// Global shutdown flag
+extern std::atomic<bool> g_shutdown_requested;
 
 int main(int argc, char* argv[]) {
     try {
@@ -28,5 +34,15 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    return 0;
+    // If we get here, shutdown was requested
+    // Give it 3 seconds to clean up, then force exit
+    for (int i = 0; i < 30; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (!g_shutdown_requested) {
+            return 0;  // Clean exit
+        }
+    }
+
+    std::cout << "Shutdown timeout - forcing exit!" << std::endl;
+    std::exit(0);
 }

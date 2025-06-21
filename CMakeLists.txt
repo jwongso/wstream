@@ -15,19 +15,27 @@ set(SOVERSION 1)
 
 # NO CUDA:
 # cmake .. \
-#   -DCMAKE_BUILD_TYPE=Release \
-#   -DGGML_NATIVE=OFF \
-#   -DGGML_OPENMP=ON \
-#   -DGGML_VULKAN=OFF \
-#   -DGGML_CUDA=OFF \
-#   -DGGML_LTO=ON \
-#   -DBUILD_SHARED_LIBS=OFF \
-#   -DGGML_AVX=ON \
-#   -DGGML_AVX2=ON \
-#   -DGGML_BMI2=ON \
-#   -DGGML_FMA=ON \
-#   -DGGML_F16C=ON \
-#   -GNinja
+#    -DCMAKE_BUILD_TYPE=Release \
+#    -DCMAKE_C_FLAGS="-O3 -march=znver5 -mtune=znver5 -ffast-math -fno-finite-math-only" \
+#    -DCMAKE_CXX_FLAGS="-O3 -march=znver5 -mtune=znver5 -ffast-math -fno-finite-math-only" \
+#    -DGGML_NATIVE=ON \
+#    -DGGML_LTO=ON \
+#    -DGGML_OPENMP=ON \
+#    -DGGML_AVX2=ON \
+#    -DGGML_FMA=ON \
+#    -DGGML_F16C=ON \
+#    -DGGML_BMI2=ON \
+#    -DGGML_AVX512=ON \
+#    -DGGML_AVX512_VBMI=ON \
+#    -DGGML_AVX512_VNNI=ON \
+#    -DGGML_AVX512_BF16=ON \
+#    -DGGML_VULKAN=ON \
+#    -DGGML_CUDA=OFF \
+#    -DGGML_ACCELERATE=OFF \
+#    -DGGML_BLAS=OFF \
+#    -DBUILD_SHARED_LIBS=OFF \
+#    -DGGML_CCACHE=ON \
+#    -GNinja
 
 find_program(CCACHE_FOUND ccache)
 if(CCACHE_FOUND)
@@ -108,10 +116,10 @@ message(STATUS "Using architecture-specific flags: ${MARCH_NATIVE}")
 string(
     APPEND opts
         "$<$<AND:$<CONFIG:RELEASE>,$<COMPILE_LANGUAGE:CXX>>:-Wall;-Wno-deprecated-declarations;-O3;${MARCH_NATIVE};-std=c++20;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS;-flto;-fomit-frame-pointer;>"
-        "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANGUAGE:CXX>>:-Wall;-Wno-deprecated-declarations;-O0;-g3;-std=c++20;-D_GLIBCXX_DEBUG;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS>"
+        "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANGUAGE:CXX>>:-Wall;-Wno-deprecated-declarations;-O0;-g3;-std=c++20;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS>"
         "$<$<AND:$<CONFIG:RELWITHDEBINFO>,$<COMPILE_LANGUAGE:CXX>>:-Wall;-Wno-deprecated-declarations;-O3;${MARCH_NATIVE};-g;-std=c++20;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS;-flto;-fomit-frame-pointer;>"
         "$<$<AND:$<CONFIG:RELEASE>,$<COMPILE_LANGUAGE:C>>:-Wall;-Wno-deprecated-declarations;-O3;${MARCH_NATIVE};-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS;-flto;-fomit-frame-pointer;>"
-        "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANGUAGE:C>>:-Wall;-Wno-deprecated-declarations;-O0;-g3;-D_GLIBCXX_DEBUG;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS>"
+        "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANGUAGE:C>>:-Wall;-Wno-deprecated-declarations;-O0;-g3;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS>"
         "$<$<AND:$<CONFIG:RELWITHDEBINFO>,$<COMPILE_LANGUAGE:C>>:-Wall;-Wno-deprecated-declarations;-O3;${MARCH_NATIVE};-g;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS;-flto;-fomit-frame-pointer;>"
 )
 add_compile_options("${opts}")

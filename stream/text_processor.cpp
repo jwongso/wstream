@@ -31,29 +31,40 @@ void text_processor::remove_bracketed_text(std::string& text) const {
     std::string result;
     result.reserve(text.size());
 
-    bool in_bracket = false;
-    bool in_paren = false;
+    int bracket_depth = 0;
+    int paren_depth = 0;
 
     for (char c : text) {
-        if (!in_bracket && !in_paren) {
-            if (c == '[' && m_config.remove_brackets) {
-                in_bracket = true;
-                continue;
+        if (m_config.remove_brackets && c == '[') {
+            bracket_depth++;
+            continue;
+        }
+        if (m_config.remove_brackets && c == ']') {
+            if (bracket_depth > 0) {
+                bracket_depth--;
+            } else {
+                // Unmatched closing bracket - keep it
+                result.push_back(c);
             }
-            if (c == '(' && m_config.remove_parentheses) {
-                in_paren = true;
-                continue;
+            continue;
+        }
+        if (m_config.remove_parentheses && c == '(') {
+            paren_depth++;
+            continue;
+        }
+        if (m_config.remove_parentheses && c == ')') {
+            if (paren_depth > 0) {
+                paren_depth--;
+            } else {
+                // Unmatched closing parenthesis - keep it
+                result.push_back(c);
             }
+            continue;
+        }
+
+        // Only add character if we're not inside brackets or parentheses
+        if (bracket_depth == 0 && paren_depth == 0) {
             result.push_back(c);
-        } else {
-            if (in_bracket && c == ']') {
-                in_bracket = false;
-                continue;
-            }
-            if (in_paren && c == ')') {
-                in_paren = false;
-                continue;
-            }
         }
     }
 

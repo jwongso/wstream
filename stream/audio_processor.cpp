@@ -20,10 +20,10 @@
 audio_processor::audio_processor(const config& cfg)
     : m_config(cfg) {
 
-    m_n_samples_30s = (1e-3 * 30000.0) * m_config.sample_rate;
-    m_n_samples_len = (1e-3 * m_config.length_ms) * m_config.sample_rate;
-    m_n_samples_step = (1e-3 * m_config.step_ms) * m_config.sample_rate;
-    m_n_samples_keep = (1e-3 * m_config.keep_ms) * m_config.sample_rate;
+    m_n_samples_30s = (MS_TO_SECONDS * BUFFER_30S_DURATION) * m_config.sample_rate;
+    m_n_samples_len = (MS_TO_SECONDS * m_config.length_ms) * m_config.sample_rate;
+    m_n_samples_step = (MS_TO_SECONDS * m_config.step_ms) * m_config.sample_rate;
+    m_n_samples_keep = (MS_TO_SECONDS * m_config.keep_ms) * m_config.sample_rate;
 
     // Pre-allocate vectors
     m_pcmf32.resize(m_n_samples_30s, 0.0f);
@@ -38,9 +38,20 @@ audio_processor::~audio_processor() {
 }
 
 bool audio_processor::initialize(int device_id) {
+    // If a specific device ID is requested, validate it first
+    if (device_id >= 0) {
+        int num_devices = SDL_GetNumAudioDevices(SDL_TRUE);
+        if (device_id >= num_devices) {
+            std::cerr << "Invalid audio device ID: " << device_id
+                      << " (only " << num_devices << " devices available)" << std::endl;
+            return false;
+        }
+    }
+
     m_audio = std::make_unique<audio_async>(m_config.length_ms);
 
     if (!m_audio->init(device_id, m_config.sample_rate)) {
+        m_audio.reset();
         return false;
     }
 

@@ -224,7 +224,6 @@ public:
     bool has_clients() const;
 
 private:
-    class session;      ///< Forward declaration for WebSocket session handler
     class shared_state; ///< Forward declaration for shared connection state
 
     /// Server port number

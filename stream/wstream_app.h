@@ -132,6 +132,9 @@ private:
     /// Path to the Whisper model file
     std::string m_model_path;
 
+    /// Static pointer to current instance for signal handler
+    static wstream_app* s_instance;
+
     /**
      * @brief Validates that a model file exists and is accessible
      * @param path Path to validate
