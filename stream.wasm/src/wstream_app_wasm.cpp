@@ -3,6 +3,7 @@
 #include "text_processor.h"
 #include <iostream>
 #include <algorithm>
+#include <chrono>
 #include <emscripten.h>
 
 wstream_app_wasm::wstream_app_wasm(const std::string& model_path)
@@ -14,90 +15,175 @@ wstream_app_wasm::~wstream_app_wasm() {
 }
 
 bool wstream_app_wasm::initialize(const std::string& model_path) {
+    set_status_internal("loading model...");
+
     m_whisper_engine = std::make_unique<whisper_engine>(model_path);
 
     if (!m_whisper_engine->initialize(true)) {
         std::cerr << "[WASM] Failed to initialize Whisper engine" << std::endl;
+        set_status_internal("error: failed to load model");
         return false;
     }
 
     m_text_processor = std::make_unique<text_processor>();
+    set_status_internal("ready");
     return true;
 }
 
-void wstream_app_wasm::process_audio_buffer(const std::vector<float>& audio_data) {
+void wstream_app_wasm::start() {
+    if (m_is_running.exchange(true)) {
+        return; // Already running
+    }
+
+    // Start worker thread
+    m_worker_thread = std::thread([this]() {
+        worker_main();
+    });
+
+    set_status_internal("started");
+}
+
+void wstream_app_wasm::stop() {
+    if (!m_is_running.exchange(false)) {
+        return; // Already stopped
+    }
+
+    // Wake up worker thread
+    m_cv.notify_all();
+
+    // Wait for thread to finish
+    if (m_worker_thread.joinable()) {
+        m_worker_thread.join();
+    }
+
+    set_status_internal("stopped");
+}
+
+void wstream_app_wasm::push_audio(const std::vector<float>& audio_data) {
     if (!m_is_running || audio_data.empty()) {
         return;
     }
 
-    // Store the last processed position
-    static size_t s_last_processed_size = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
 
-    // Only process if we have new audio
-    if (audio_data.size() <= s_last_processed_size) {
-        return;
-    }
+        // Append new audio data
+        m_audio_buffer.insert(m_audio_buffer.end(), audio_data.begin(), audio_data.end());
 
-    // Transcribe the entire audio
-    std::string full_transcription = m_whisper_engine->transcribe(audio_data);
-
-    if (!full_transcription.empty()) {
-        // Extract only the new part of transcription
-        std::string new_text = extract_new_transcription(full_transcription);
-
-        if (!new_text.empty()) {
-            // Process through text processor
-            std::string processed_text = m_text_processor->process(new_text);
-
-            if (!processed_text.empty() && m_transcription_callback) {
-                m_transcription_callback(processed_text);
-            }
+        // Keep buffer size reasonable (e.g., 2 minutes max)
+        const size_t max_samples = 120 * 16000; // 2 minutes
+        if (m_audio_buffer.size() > max_samples) {
+            size_t to_remove = m_audio_buffer.size() - max_samples;
+            m_audio_buffer.erase(m_audio_buffer.begin(), m_audio_buffer.begin() + to_remove);
         }
     }
 
-    // Update last processed size
-    s_last_processed_size = audio_data.size();
+    // Notify worker thread
+    m_cv.notify_one();
 }
 
-std::string wstream_app_wasm::extract_new_transcription(const std::string& full_text) {
-    // Keep track of last transcription to extract only new parts
-    static std::string s_last_transcription;
+void wstream_app_wasm::worker_main() {
+    std::cout << "[Worker] Thread started" << std::endl;
 
-    std::string new_text;
+    std::vector<float> processing_buffer;
+    processing_buffer.reserve(AUDIO_WINDOW_SAMPLES);
 
-    if (full_text.length() > s_last_transcription.length()) {
-        // Check if the full text starts with the last transcription
-        if (full_text.substr(0, s_last_transcription.length()) == s_last_transcription) {
-            // Extract only the new part
-            new_text = full_text.substr(s_last_transcription.length());
-        } else {
-            // Full text has changed completely
-            new_text = full_text;
+    while (m_is_running) {
+        {
+            std::unique_lock<std::mutex> lock(m_mutex);
+
+            // Wait for audio data
+            m_cv.wait(lock, [this] {
+                return !m_is_running || m_audio_buffer.size() >= 16000; // At least 1 second
+            });
+
+            if (!m_is_running) {
+                break;
+            }
+
+            // Take the last window_samples for processing
+            size_t samples_to_take = std::min(
+                static_cast<size_t>(AUDIO_WINDOW_SAMPLES),
+                m_audio_buffer.size()
+            );
+
+            if (samples_to_take < 16000) { // Less than 1 second
+                continue;
+            }
+
+            // Copy audio data for processing
+            processing_buffer.clear();
+            processing_buffer.assign(
+                m_audio_buffer.end() - samples_to_take,
+                m_audio_buffer.end()
+            );
+
+            // Clear old audio to prevent unbounded growth
+            m_audio_buffer.clear();
         }
+
+        // Process audio outside of lock
+        set_status_internal("processing...");
+
+        auto t_start = std::chrono::high_resolution_clock::now();
+
+        // Transcribe
+        std::string transcription = m_whisper_engine->transcribe(processing_buffer);
+
+        auto t_end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration<double>(t_end - t_start).count();
+
+        std::cout << "[Worker] Processed " << processing_buffer.size()
+                  << " samples in " << duration << " seconds" << std::endl;
+
+        if (!transcription.empty()) {
+            // Process through text processor
+            std::string processed_text = m_text_processor->process(transcription);
+
+            if (!processed_text.empty()) {
+                // Store transcription
+                {
+                    std::lock_guard<std::mutex> lock(m_mutex);
+                    m_latest_transcription = processed_text;
+                }
+
+                // Call callback if set
+                if (m_transcription_callback) {
+                    m_transcription_callback(processed_text);
+                }
+            }
+        }
+
+        set_status_internal("waiting for audio...");
     }
 
-    // Update last transcription
-    s_last_transcription = full_text;
+    std::cout << "[Worker] Thread stopped" << std::endl;
+}
 
-    // Trim whitespace
-    if (!new_text.empty()) {
-        new_text.erase(0, new_text.find_first_not_of(" \t\n\r"));
-        new_text.erase(new_text.find_last_not_of(" \t\n\r") + 1);
-    }
+std::string wstream_app_wasm::get_transcribed() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::string result = std::move(m_latest_transcription);
+    m_latest_transcription.clear();
+    return result;
+}
 
-    return new_text;
+void wstream_app_wasm::set_status_internal(const std::string& status) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_status = status;
+}
+
+std::string wstream_app_wasm::get_status() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_status_forced.empty() ? m_status : m_status_forced;
+}
+
+void wstream_app_wasm::set_status(const std::string& status) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_status_forced = status;
 }
 
 void wstream_app_wasm::set_transcription_callback(TranscriptionCallback callback) {
     m_transcription_callback = callback;
-}
-
-void wstream_app_wasm::start() {
-    m_is_running = true;
-}
-
-void wstream_app_wasm::stop() {
-    m_is_running = false;
 }
 
 bool wstream_app_wasm::is_running() const {

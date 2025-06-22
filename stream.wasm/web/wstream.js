@@ -7,8 +7,8 @@ class WStreamASR {
         this.audio = null;
         this.audio0 = null;
 
-        // The stream instance
-        this.instance = null;
+        // The stream handle (not instance)
+        this.handle = null;
 
         // Module
         this.Module = null;
@@ -18,6 +18,7 @@ class WStreamASR {
         this.doRecording = false;
         this.startTime = 0;
         this.isProcessing = false;
+        this.lastStatus = '';
 
         // Constants (matching original)
         this.kSampleRate = 16000;
@@ -75,12 +76,14 @@ class WStreamASR {
             const uint8Array = new Uint8Array(modelData);
             this.Module.FS.writeFile(tempPath, uint8Array);
 
-            // Initialize whisper
-            this.instance = this.Module.init(tempPath);
+            // Initialize whisper - returns a handle
+            this.handle = this.Module.init(tempPath);
 
-            if (!this.instance) {
+            if (!this.handle) {
                 throw new Error('Failed to initialize Whisper');
             }
+
+            console.log('[JS] Whisper initialized with handle:', this.handle);
 
             this.setStatus('ready', 'Ready');
             this.startBtn.disabled = false;
@@ -96,7 +99,7 @@ class WStreamASR {
     }
 
     onStart() {
-        if (!this.instance) {
+        if (!this.handle) {
             console.error('[JS] Whisper not initialized');
             return;
         }
@@ -119,7 +122,10 @@ class WStreamASR {
             });
         }
 
-        this.Module.set_status("");
+        // Update status using handle
+        if (this.handle) {
+            this.Module.set_status(this.handle, "");
+        }
 
         this.startBtn.disabled = true;
         this.stopBtn.disabled = false;
@@ -175,7 +181,7 @@ class WStreamASR {
                                 audioAll.set(this.audio, this.audio0 == null ? 0 : this.audio0.length);
 
                                 // Process audio asynchronously
-                                if (this.instance && !this.isProcessing) {
+                                if (this.handle && !this.isProcessing) {
                                     this.processAudioAsync(audioAll);
                                 }
                             });
@@ -242,39 +248,44 @@ class WStreamASR {
     }
 
     async processAudioAsync(audioBuffer) {
-        // Set flag to prevent multiple processing
-        this.isProcessing = true;
+        if (!this.handle) return;
 
         try {
-            // Yield to the browser to keep UI responsive
-            await new Promise(resolve => setTimeout(resolve, 0));
-
-            // Process audio
-            this.Module.set_audio(this.instance, audioBuffer);
-
-            // Yield again to let UI update
-            await new Promise(resolve => setTimeout(resolve, 0));
-
+            // Push audio to worker thread (non-blocking)
+            const result = this.Module.set_audio(this.handle, audioBuffer);
+            if (result !== 0) {
+                console.error('[JS] Error pushing audio, result:', result);
+            }
         } catch (error) {
-            console.error('[JS] Error processing audio:', error);
-        } finally {
-            this.isProcessing = false;
+            console.error('[JS] Error pushing audio:', error);
         }
     }
 
     startUpdateInterval() {
         setInterval(() => {
-            if (!this.instance) return;
+            if (!this.handle) return;
 
-            const transcribed = this.Module.get_transcribed();
+            // Poll for transcriptions
+            const transcribed = this.Module.get_transcribed(this.handle);
             if (transcribed && transcribed.length > 0) {
                 this.onTranscription(transcribed);
+            }
+
+            // Update status from C++
+            const status = this.Module.get_status(this.handle);
+            if (status && status !== this.lastStatus) {
+                console.log('[JS] Status from C++:', status);
+                this.lastStatus = status;
+                // Optionally update UI with C++ status
+                // this.statusText.textContent = status;
             }
         }, 100);
     }
 
     stopRecording() {
-        this.Module.set_status("paused");
+        if (this.handle) {
+            this.Module.set_status(this.handle, "paused");
+        }
         this.doRecording = false;
         this.audio0 = null;
         this.audio = null;
@@ -308,6 +319,13 @@ class WStreamASR {
         this.statusIndicator.className = 'status-indicator';
         this.statusIndicator.classList.add(`status-${type}`);
     }
+
+    cleanup() {
+        if (this.handle) {
+            this.Module.free_instance(this.handle);
+            this.handle = null;
+        }
+    }
 }
 
 // Initialize when page loads
@@ -315,4 +333,11 @@ let asr;
 window.addEventListener('load', () => {
     asr = new WStreamASR();
     asr.setStatus('ready', 'Ready to initialize');
+});
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+    if (asr) {
+        asr.cleanup();
+    }
 });
