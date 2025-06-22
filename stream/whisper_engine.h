@@ -136,6 +136,7 @@ public:
 
     /**
      * @brief Initializes the Whisper model and processing parameters
+     * @param wasm Initialize for WebAssembly application, default to false
      * @return true if initialization successful, false otherwise
      *
      * This method:
@@ -146,7 +147,7 @@ public:
      *
      * @note Must be called before transcribe() can be used
      */
-    bool initialize();
+    bool initialize(bool wasm = false);
 
     /**
      * @brief Transcribes audio data to text
@@ -184,6 +185,9 @@ private:
 
     /// Whisper processing parameters
     whisper_full_params m_wparams;
+
+    /// WASM flag
+    bool m_wasm;
 
     /**
      * @brief Determines optimal thread count for current hardware

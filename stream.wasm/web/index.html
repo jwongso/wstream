@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WStream ASR - WebAssembly Demo</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎤 WStream ASR</h1>
+            <p>Real-time Speech Recognition in Your Browser</p>
+        </header>
+
+        <div class="status-card">
+            <div class="status-indicator" id="statusIndicator"></div>
+            <span id="statusText">Initializing...</span>
+        </div>
+
+        <div class="controls">
+            <button id="initBtn" class="btn btn-primary">Initialize Model</button>
+            <button id="startBtn" class="btn btn-success" disabled>Start Recording</button>
+            <button id="stopBtn" class="btn btn-danger" disabled>Stop Recording</button>
+        </div>
+
+        <div class="model-selector">
+            <label for="modelSelect">Model:</label>
+            <select id="modelSelect">
+                <option value="models/ggml-tiny.en.bin">Tiny (39 MB)</option>
+                <option value="models/ggml-tiny.en-q5_1.bin">Tiny Q5_1 (31 MB)</option>
+                <option value="models/ggml-base.en.bin">Base (142 MB)</option>
+                <option value="models/ggml-base.en-q5_1.bin" selected>Base Q5_1 (57 MB)</option>
+            </select>
+        </div>
+
+        <div class="transcription-container">
+            <h2>Transcription</h2>
+            <div id="transcription" class="transcription-box"></div>
+            <button id="clearBtn" class="btn btn-secondary">Clear</button>
+        </div>
+
+        <div class="info">
+            <p>💡 Click "Initialize Model" first, then "Start Recording" to begin.</p>
+            <p>⚡ Powered by Whisper.cpp and WebAssembly</p>
+        </div>
+    </div>
+
+    <!-- Load WASM module -->
+    <script src="wstream_wasm.js"></script>
+
+    <!-- Load application -->
+    <script src="wstream.js"></script>
+</body>
+</html>

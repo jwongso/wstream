@@ -2,13 +2,14 @@ find_package(Threads REQUIRED)
 
 # third-party
 # SDL2
-find_package(SDL2 REQUIRED)
+if (NOT EMSCRIPTEN)
+    find_package(SDL2 REQUIRED)
 
-string(STRIP "${SDL2_LIBRARIES}" SDL2_LIBRARIES)
+    string(STRIP "${SDL2_LIBRARIES}" SDL2_LIBRARIES)
 
-message(STATUS "SDL2_INCLUDE_DIRS = ${SDL2_INCLUDE_DIRS}")
-message(STATUS "SDL2_LIBRARIES    = ${SDL2_LIBRARIES}")
-
+    message(STATUS "SDL2_INCLUDE_DIRS = ${SDL2_INCLUDE_DIRS}")
+    message(STATUS "SDL2_LIBRARIES    = ${SDL2_LIBRARIES}")
+endif()
 # common
 
 set(TARGET common)

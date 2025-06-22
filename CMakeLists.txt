@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.20)
 project("wstream" C CXX)
 project("wstream" VERSION 0.0.1)
 # Set the list index policy to suppress warnings
@@ -58,72 +58,6 @@ endif()
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-# Detect CPU architecture and set march/mcpu flags
-set(MARCH_NATIVE "")  # Default to empty; fallback to -march=native later
-
-if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
-    # Detect Apple M1/M2/M3 CPUs
-    execute_process(
-        COMMAND sysctl -n machdep.cpu.brand_string
-        OUTPUT_VARIABLE APPLE_CPU_BRAND
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
-    message(STATUS "Detected Apple CPU: ${APPLE_CPU_BRAND}")
-
-    if(APPLE_CPU_BRAND MATCHES "M3")
-        set(MARCH_NATIVE "-mcpu=apple-m3")
-    elseif(APPLE_CPU_BRAND MATCHES "M2")
-        set(MARCH_NATIVE "-mcpu=apple-m2")
-    elseif(APPLE_CPU_BRAND MATCHES "M1")
-        set(MARCH_NATIVE "-mcpu=apple-m1")
-    else()
-        message(WARNING "Unknown Apple Silicon CPU, using default flags")
-    endif()
-
-elseif(UNIX AND NOT APPLE)
-    find_program(LSCPU lscpu)
-    if(LSCPU)
-        execute_process(
-            COMMAND ${LSCPU}
-            OUTPUT_VARIABLE LSCPU_OUTPUT
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-        )
-        string(REGEX MATCH "Model name:[^\n]+" CPU_LINE "${LSCPU_OUTPUT}")
-        string(REGEX REPLACE ".*Model name:[ \t]*" "" CPU_MODEL "${CPU_LINE}")
-
-        message(STATUS "Detected CPU model: ${CPU_MODEL}")
-
-        if(CPU_MODEL MATCHES "Zen 2")
-            set(MARCH_NATIVE "-march=znver2")
-        elseif(CPU_MODEL MATCHES "Zen 3")
-            set(MARCH_NATIVE "-march=znver3")
-        elseif(CPU_MODEL MATCHES "Zen 4")
-            set(MARCH_NATIVE "-march=znver4")
-        elseif(CPU_MODEL MATCHES "Alder Lake")
-            set(MARCH_NATIVE "-march=alderlake")
-        elseif(CPU_MODEL MATCHES "Ryzen AI 9 HX 370")
-            set(MARCH_NATIVE "-march=znver5")
-        endif()
-    endif()
-endif()
-
-if(MARCH_NATIVE STREQUAL "")
-    set(MARCH_NATIVE "-march=native")
-endif()
-
-message(STATUS "Using architecture-specific flags: ${MARCH_NATIVE}")
-
-string(
-    APPEND opts
-        "$<$<AND:$<CONFIG:RELEASE>,$<COMPILE_LANGUAGE:CXX>>:-Wall;-Wno-deprecated-declarations;-O3;${MARCH_NATIVE};-std=c++20;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS;-flto;-fomit-frame-pointer;>"
-        "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANGUAGE:CXX>>:-Wall;-Wno-deprecated-declarations;-O0;-g3;-std=c++20;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS>"
-        "$<$<AND:$<CONFIG:RELWITHDEBINFO>,$<COMPILE_LANGUAGE:CXX>>:-Wall;-Wno-deprecated-declarations;-O3;${MARCH_NATIVE};-g;-std=c++20;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS;-flto;-fomit-frame-pointer;>"
-        "$<$<AND:$<CONFIG:RELEASE>,$<COMPILE_LANGUAGE:C>>:-Wall;-Wno-deprecated-declarations;-O3;${MARCH_NATIVE};-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS;-flto;-fomit-frame-pointer;>"
-        "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANGUAGE:C>>:-Wall;-Wno-deprecated-declarations;-O0;-g3;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS>"
-        "$<$<AND:$<CONFIG:RELWITHDEBINFO>,$<COMPILE_LANGUAGE:C>>:-Wall;-Wno-deprecated-declarations;-O3;${MARCH_NATIVE};-g;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS;-flto;-fomit-frame-pointer;>"
-)
-add_compile_options("${opts}")
-
 if (EMSCRIPTEN)
     set(BUILD_SHARED_LIBS_DEFAULT OFF)
 
@@ -139,30 +73,81 @@ if (EMSCRIPTEN)
 
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-deprecated")
 
-    # Add this near the top of your CMakeLists.txt, before any project() calls
-    # Set default Emscripten options
-    set(WHISPER_WASM_SINGLE_FILE ON CACHE BOOL "Embed WASM in JS file")
-    set(GGML_VULKAN OFF CACHE BOOL "Disable Vulkan for WASM")
-    set(GGML_OPENMP OFF CACHE BOOL "Disable OpenMP for WASM")
-    set(BUILD_SHARED_LIBS OFF CACHE BOOL "Force static linking for WASM")
-
-    # Disable all GPU backends
-    set(GGML_CUDA OFF CACHE BOOL "Disable CUDA for WASM")
-    set(GGML_METAL OFF CACHE BOOL "Disable Metal for WASM")
-    set(GGML_OPENCL OFF CACHE BOOL "Disable OpenCL for WASM")
-
-    # Disable CPU optimizations not available in WASM
-    set(GGML_BLAS OFF CACHE BOOL "Disable BLAS for WASM")
-    set(GGML_OPENBLAS OFF CACHE BOOL "Disable OpenBLAS for WASM")
-
     message(STATUS "Configuring for Emscripten build")
 
     add_subdirectory(ggml)
     add_subdirectory(src)
     add_subdirectory(common)
-    add_subdirectory(stream2.wasm)
+    add_subdirectory(stream.wasm)
 
 else()
+
+    # Detect CPU architecture and set march/mcpu flags
+    set(MARCH_NATIVE "")  # Default to empty; fallback to -march=native later
+
+    if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+        # Detect Apple M1/M2/M3 CPUs
+        execute_process(
+            COMMAND sysctl -n machdep.cpu.brand_string
+            OUTPUT_VARIABLE APPLE_CPU_BRAND
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        message(STATUS "Detected Apple CPU: ${APPLE_CPU_BRAND}")
+
+        if(APPLE_CPU_BRAND MATCHES "M3")
+            set(MARCH_NATIVE "-mcpu=apple-m3")
+        elseif(APPLE_CPU_BRAND MATCHES "M2")
+            set(MARCH_NATIVE "-mcpu=apple-m2")
+        elseif(APPLE_CPU_BRAND MATCHES "M1")
+            set(MARCH_NATIVE "-mcpu=apple-m1")
+        else()
+            message(WARNING "Unknown Apple Silicon CPU, using default flags")
+        endif()
+
+    elseif(UNIX AND NOT APPLE)
+        find_program(LSCPU lscpu)
+        if(LSCPU)
+            execute_process(
+                COMMAND ${LSCPU}
+                OUTPUT_VARIABLE LSCPU_OUTPUT
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+            )
+            string(REGEX MATCH "Model name:[^\n]+" CPU_LINE "${LSCPU_OUTPUT}")
+            string(REGEX REPLACE ".*Model name:[ \t]*" "" CPU_MODEL "${CPU_LINE}")
+
+            message(STATUS "Detected CPU model: ${CPU_MODEL}")
+
+            if(CPU_MODEL MATCHES "Zen 2")
+                set(MARCH_NATIVE "-march=znver2")
+            elseif(CPU_MODEL MATCHES "Zen 3")
+                set(MARCH_NATIVE "-march=znver3")
+            elseif(CPU_MODEL MATCHES "Zen 4")
+                set(MARCH_NATIVE "-march=znver4")
+            elseif(CPU_MODEL MATCHES "Alder Lake")
+                set(MARCH_NATIVE "-march=alderlake")
+            elseif(CPU_MODEL MATCHES "Ryzen AI 9 HX 370")
+                set(MARCH_NATIVE "-march=znver5")
+            endif()
+        endif()
+    endif()
+
+    if(MARCH_NATIVE STREQUAL "")
+        set(MARCH_NATIVE "-march=native")
+    endif()
+
+    message(STATUS "Using architecture-specific flags: ${MARCH_NATIVE}")
+
+    string(
+        APPEND opts
+            "$<$<AND:$<CONFIG:RELEASE>,$<COMPILE_LANGUAGE:CXX>>:-Wall;-Wno-deprecated-declarations;-O3;${MARCH_NATIVE};-std=c++20;-fPIC;-flto;-fomit-frame-pointer;>"
+            "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANGUAGE:CXX>>:-Wall;-Wno-deprecated-declarations;-O0;-g3;-std=c++20;-fPIC>"
+            "$<$<AND:$<CONFIG:RELWITHDEBINFO>,$<COMPILE_LANGUAGE:CXX>>:-Wall;-Wno-deprecated-declarations;-O3;${MARCH_NATIVE};-g;-std=c++20;-fPIC;-flto;-fomit-frame-pointer;>"
+            "$<$<AND:$<CONFIG:RELEASE>,$<COMPILE_LANGUAGE:C>>:-Wall;-Wno-deprecated-declarations;-O3;${MARCH_NATIVE};-fPIC;-flto;-fomit-frame-pointer;>"
+            "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANGUAGE:C>>:-Wall;-Wno-deprecated-declarations;-O0;-g3;-fPIC>"
+            "$<$<AND:$<CONFIG:RELWITHDEBINFO>,$<COMPILE_LANGUAGE:C>>:-Wall;-Wno-deprecated-declarations;-O3;${MARCH_NATIVE};-g;-fPIC;-flto;-fomit-frame-pointer;>"
+    )
+    add_compile_options("${opts}")
+
     if (MINGW)
         set(BUILD_SHARED_LIBS_DEFAULT OFF)
     else()

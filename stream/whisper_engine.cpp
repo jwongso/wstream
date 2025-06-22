@@ -23,13 +23,20 @@ whisper_engine::~whisper_engine() {
     }
 }
 
-bool whisper_engine::initialize() {
+bool whisper_engine::initialize(bool wasm) {
+    m_wasm = wasm;
     // Set up context parameters
     struct whisper_context_params cparams = whisper_context_default_params();
-    cparams.use_gpu = m_config.use_gpu;
+    if (m_wasm) {
+        cparams.use_gpu = false;
+    }
+    else {
+        cparams.use_gpu = m_config.use_gpu;
+    }
 
     m_ctx = whisper_init_from_file_with_params(m_model_path.c_str(), cparams);
     if (!m_ctx) {
+        std::cerr << "Failed to initialize whisper context from " << m_model_path << std::endl;
         return false;
     }
 
@@ -39,41 +46,81 @@ bool whisper_engine::initialize() {
 
 void whisper_engine::setup_whisper_params() {
     m_wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    m_wparams.print_progress = false;
-    m_wparams.print_realtime = false;
-    m_wparams.no_context = true;
-    m_wparams.language = m_config.language.c_str();
-    m_wparams.n_threads = m_config.n_threads > 0 ? m_config.n_threads : get_optimal_thread_count();
-    m_wparams.temperature = m_config.temperature;
-    m_wparams.single_segment = !m_config.use_vad;
-    m_wparams.max_tokens = m_config.max_tokens;
-    m_wparams.audio_ctx = 0;
+    if (m_wasm) {
+        m_wparams.n_threads        = std::min(8, (int) std::thread::hardware_concurrency());
+        m_wparams.offset_ms        = 0;
+        m_wparams.translate        = false;
+        m_wparams.no_context       = true;
+        m_wparams.single_segment   = true;
+        m_wparams.print_realtime   = false;
+        m_wparams.print_progress   = false;
+        m_wparams.print_timestamps = false;
+        m_wparams.print_special    = false;
+
+        m_wparams.max_tokens       = 32;
+        m_wparams.audio_ctx        = 768; // partial encoder context for better performance
+
+        // disable temperature fallback
+        m_wparams.temperature_inc  = -1.0f;
+
+        m_wparams.language         = "en";
+    }
+    else {
+        m_wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+        m_wparams.print_progress = false;
+        m_wparams.print_realtime = false;
+        m_wparams.no_context = true;
+        m_wparams.language = m_config.language.c_str();
+        m_wparams.n_threads = m_config.n_threads > 0 ? m_config.n_threads : get_optimal_thread_count();
+        m_wparams.temperature = m_config.temperature;
+        m_wparams.single_segment = !m_config.use_vad;
+        m_wparams.max_tokens = m_config.max_tokens;
+        m_wparams.audio_ctx = 0;
+    }
 }
 
 std::string whisper_engine::transcribe(const std::vector<float>& audio_data) {
-    if (!m_ctx || audio_data.empty()) {
+    if (!m_ctx) {
+        std::cerr << "Error: Whisper context is null!" << std::endl;
+        return "";
+    }
+
+    if (audio_data.empty()) {
+        return "";
+    }
+
+    // Check if audio has actual content (not just silence)
+    float max_val = 0.0f;
+    for (const auto& sample : audio_data) {
+        max_val = std::max(max_val, std::abs(sample));
+    }
+
+    if (max_val < 0.001f) {
         return "";
     }
 
     // Run inference
-    if (whisper_full(m_ctx, m_wparams, audio_data.data(), audio_data.size()) != 0) {
-        std::cerr << "Failed to process audio.\n";
+    int ret = whisper_full(m_ctx, m_wparams, audio_data.data(), audio_data.size());
+
+    if (ret != 0) {
+        std::cerr << "whisper_full failed with code: " << ret << std::endl;
         return "";
     }
 
-    // Get the transcription
-    const int n_segments = whisper_full_n_segments(m_ctx);
-    if (n_segments <= 0) {
+    // Get number of segments
+    int n_segments = whisper_full_n_segments(m_ctx);
+
+    if (n_segments == 0) {
         return "";
     }
 
+    // Build result string
     std::string result;
-    result.reserve(n_segments * 64); // Estimate
-
     for (int i = 0; i < n_segments; ++i) {
         const char* text = whisper_full_get_segment_text(m_ctx, i);
-        if (text) {
-            result += text;
+        result += text;
+        if (i < n_segments - 1) {
+            result += " ";
         }
     }
 
