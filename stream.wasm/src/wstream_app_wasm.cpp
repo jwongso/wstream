@@ -6,6 +6,61 @@
 #include <chrono>
 #include <emscripten.h>
 
+class simple_vad {
+private:
+    static constexpr float ENERGY_THRESHOLD = 0.01f;
+    static constexpr float FREQ_THRESHOLD = 0.02f;
+    static constexpr int MIN_VOICE_FRAMES = 800; // 50ms at 16kHz
+
+public:
+    static bool has_voice_activity(const std::vector<float>& audio) {
+        if (audio.size() < MIN_VOICE_FRAMES) {
+            return false;
+        }
+
+        // Calculate RMS energy
+        float energy = 0.0f;
+        float max_amplitude = 0.0f;
+
+        for (const auto& sample : audio) {
+            energy += sample * sample;
+            max_amplitude = std::max(max_amplitude, std::abs(sample));
+        }
+
+        energy = std::sqrt(energy / audio.size());
+
+        // Check if audio has sufficient energy and peak amplitude
+        return energy > ENERGY_THRESHOLD && max_amplitude > FREQ_THRESHOLD;
+    }
+
+    // Find voice segments in audio
+    static std::pair<size_t, size_t> find_voice_bounds(const std::vector<float>& audio) {
+        const size_t window_size = 1600; // 100ms windows
+        size_t start = 0;
+        size_t end = audio.size();
+
+        // Find start of voice
+        for (size_t i = 0; i < audio.size() - window_size; i += window_size/2) {
+            std::vector<float> window(audio.begin() + i, audio.begin() + i + window_size);
+            if (has_voice_activity(window)) {
+                start = i;
+                break;
+            }
+        }
+
+        // Find end of voice
+        for (size_t i = audio.size(); i > window_size; i -= window_size/2) {
+            std::vector<float> window(audio.begin() + i - window_size, audio.begin() + i);
+            if (has_voice_activity(window)) {
+                end = i;
+                break;
+            }
+        }
+
+        return {start, end};
+    }
+};
+
 wstream_app_wasm::wstream_app_wasm(const std::string& model_path)
     : m_model_path(model_path) {
 }
@@ -122,13 +177,31 @@ void wstream_app_wasm::worker_main() {
             m_audio_buffer.clear();
         }
 
+        // Skip if no voice activity
+        if (!simple_vad::has_voice_activity(processing_buffer)) {
+            set_status_internal("waiting for speech...");
+            continue;
+        }
+
+        // Find voice boundaries to process only speech
+        auto [start, end] = simple_vad::find_voice_bounds(processing_buffer);
+        if (end - start < 8000) { // Less than 0.5 seconds
+            continue;
+        }
+
+        // Process only the part with voice
+        std::vector<float> voice_segment(
+            processing_buffer.begin() + start,
+            processing_buffer.begin() + end
+        );
+
         // Process audio outside of lock
         set_status_internal("processing...");
 
         auto t_start = std::chrono::high_resolution_clock::now();
 
         // Transcribe
-        std::string transcription = m_whisper_engine->transcribe(processing_buffer);
+        std::string transcription = m_whisper_engine->transcribe(voice_segment);
 
         auto t_end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration<double>(t_end - t_start).count();

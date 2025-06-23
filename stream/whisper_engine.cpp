@@ -47,23 +47,35 @@ bool whisper_engine::initialize(bool wasm) {
 void whisper_engine::setup_whisper_params() {
     m_wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     if (m_wasm) {
-        m_wparams.n_threads        = std::min(8, (int) std::thread::hardware_concurrency());
-        m_wparams.offset_ms        = 0;
-        m_wparams.translate        = false;
-        m_wparams.no_context       = true;
-        m_wparams.single_segment   = true;
-        m_wparams.print_realtime   = false;
-        m_wparams.print_progress   = false;
+        // Core performance settings
+        m_wparams.n_threads = 4; // Sweet spot for browsers
+        m_wparams.audio_ctx = 512; // Reduced from 768
+
+        // Token and context limits
+        m_wparams.max_tokens = 64; // Increased from 32
+        m_wparams.max_len = 0; // No max length
+
+        // Quality thresholds - these are standard
+        m_wparams.entropy_thold = 2.4f;
+        m_wparams.logprob_thold = -1.0f;
+        m_wparams.no_speech_thold = 0.6f;
+
+        // Temperature settings
+        m_wparams.temperature = 0.0f;
+        m_wparams.temperature_inc = -1.0f; // Disable fallback
+
+        // Standard flags that exist in all versions
+        m_wparams.print_special = false;
+        m_wparams.print_progress = false;
+        m_wparams.print_realtime = false;
         m_wparams.print_timestamps = false;
-        m_wparams.print_special    = false;
+        m_wparams.suppress_blank = true;
+        m_wparams.single_segment = true;
+        m_wparams.no_context = true;
+        m_wparams.translate = false;
 
-        m_wparams.max_tokens       = 32;
-        m_wparams.audio_ctx        = 768; // partial encoder context for better performance
-
-        // disable temperature fallback
-        m_wparams.temperature_inc  = -1.0f;
-
-        m_wparams.language         = "en";
+        // Language
+        m_wparams.language = "en";
     }
     else {
         m_wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);

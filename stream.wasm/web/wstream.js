@@ -56,6 +56,22 @@ class WStreamASR {
             // Load WASM module
             this.Module = await WStreamModule();
 
+            // Wait a bit for full initialization
+            await new Promise(resolve => setTimeout(resolve, 100));
+
+            // Check if FS is available
+            if (!this.Module.FS) {
+                console.error('[JS] FS module not available');
+                // Try alternative access methods
+                if (this.Module._FS) {
+                    this.Module.FS = this.Module._FS;
+                } else if (window.FS) {
+                    this.Module.FS = window.FS;
+                } else {
+                    throw new Error('Filesystem API not available');
+                }
+            }
+
             // Get selected model
             const modelPath = this.modelSelect.value;
 
@@ -69,12 +85,32 @@ class WStreamASR {
 
             this.setStatus('loading', 'Initializing Whisper...');
 
-            // Write to FS
+            // Write to FS - Alternative methods
             const modelFileName = modelPath.split('/').pop();
             const tempPath = `/tmp/${modelFileName}`;
 
-            const uint8Array = new Uint8Array(modelData);
-            this.Module.FS.writeFile(tempPath, uint8Array);
+            try {
+                // Method 1: Standard writeFile
+                const uint8Array = new Uint8Array(modelData);
+                this.Module.FS.writeFile(tempPath, uint8Array);
+            } catch (e) {
+                console.error('[JS] writeFile failed, trying alternative:', e);
+
+                // Method 2: Using FS_createDataFile
+                try {
+                    const uint8Array = new Uint8Array(modelData);
+                    this.Module.FS_createDataFile(
+                        '/tmp',           // parent directory
+                        modelFileName,    // filename
+                        uint8Array,       // data
+                        true,            // canRead
+                        true             // canWrite
+                    );
+                } catch (e2) {
+                    console.error('[JS] FS_createDataFile also failed:', e2);
+                    throw new Error('Failed to write model to filesystem');
+                }
+            }
 
             // Initialize whisper - returns a handle
             this.handle = this.Module.init(tempPath);

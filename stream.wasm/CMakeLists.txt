@@ -13,9 +13,6 @@ endif()
 # Set output directory
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/dist)
 
-# Options
-option(WHISPER_WASM_SIMD "Enable SIMD" ON)
-
 # Emscripten settings
 set(CMAKE_EXECUTABLE_SUFFIX ".js")
 
@@ -28,13 +25,13 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     list(APPEND EMCC_COMPILE_FLAGS "-O0" "-g")
     list(APPEND EMCC_LINK_FLAGS "-s ASSERTIONS=2" "-s SAFE_HEAP=1" "-s STACK_OVERFLOW_CHECK=1")
 else()
-    list(APPEND EMCC_COMPILE_FLAGS "-O3")
-    list(APPEND EMCC_LINK_FLAGS "-s ASSERTIONS=0")
-endif()
-
-# Enable SIMD if requested (compile flag)
-if(WHISPER_WASM_SIMD)
-    list(APPEND EMCC_COMPILE_FLAGS "-msimd128")
+    list(APPEND EMCC_COMPILE_FLAGS
+        "-O3"
+        "-flto"  # Link-time optimization
+        "-ffast-math"  # Faster math
+        "-DNDEBUG"
+        "-msimd128"
+    )
 endif()
 
 # Link-only flags
