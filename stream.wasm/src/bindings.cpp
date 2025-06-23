@@ -30,7 +30,7 @@ size_t init(const std::string& model_path) {
     return handle;
 }
 
-// Free an instance - renamed to avoid conflict with stdlib free()
+// Free an instance
 void free_instance(size_t handle) {
     auto it = g_apps.find(handle);
     if (it != g_apps.end()) {
@@ -40,42 +40,8 @@ void free_instance(size_t handle) {
     }
 }
 
-// Set audio data - matching the original Whisper.cpp pattern
+// Set audio data
 int set_audio(size_t handle, const val& audio) {
-    auto it = g_apps.find(handle);
-    if (it == g_apps.end()) {
-        return -1;
-    }
-
-    // Get the length of the audio array
-    const int n = audio["length"].as<int>();
-    if (n == 0) {
-        return -2;
-    }
-
-    // Create a vector to hold the audio data
-    std::vector<float> audio_data;
-    audio_data.resize(n);
-
-    // Copy data from JavaScript Float32Array to C++ vector
-    // This approach matches the original Whisper.cpp implementation
-    val heap = val::module_property("HEAPU8");
-    val memory = heap["buffer"];
-
-    // Create a view of the C++ vector in JavaScript memory space
-    val memoryView = audio["constructor"].new_(memory, reinterpret_cast<uintptr_t>(audio_data.data()), n);
-
-    // Copy the audio data
-    memoryView.call<void>("set", audio);
-
-    // Push to processing queue
-    it->second->push_audio(audio_data);
-
-    return 0;
-}
-
-// Alternative simpler approach if the above doesn't work
-int set_audio_simple(size_t handle, const val& audio) {
     auto it = g_apps.find(handle);
     if (it == g_apps.end()) {
         return -1;
@@ -129,11 +95,22 @@ void set_status(size_t handle, const std::string& status) {
     }
 }
 
+// Get confidence metrics
+std::string get_confidence_metrics(size_t handle) {
+    auto it = g_apps.find(handle);
+    if (it == g_apps.end()) {
+        return "{\"error\":\"invalid handle\"}";
+    }
+
+    return it->second->get_confidence_metrics();
+}
+
 EMSCRIPTEN_BINDINGS(wstream_module) {
     function("init", &init);
     function("free_instance", &free_instance);
-    function("set_audio", &set_audio_simple);
+    function("set_audio", &set_audio);
     function("get_transcribed", &get_transcribed);
     function("get_status", &get_status);
     function("set_status", &set_status);
+    function("get_confidence_metrics", &get_confidence_metrics);
 }

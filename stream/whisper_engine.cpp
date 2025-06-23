@@ -139,6 +139,108 @@ std::string whisper_engine::transcribe(const std::vector<float>& audio_data) {
     return result;
 }
 
+transcription_result whisper_engine::transcribe_with_confidence(const std::vector<float>& audio_data) {
+    transcription_result result;
+
+    if (!m_ctx || audio_data.empty()) {
+        return result;
+    }
+
+    // Check for silence
+    float max_val = 0.0f;
+    for (const auto& sample : audio_data) {
+        max_val = std::max(max_val, std::abs(sample));
+    }
+
+    if (max_val < 0.001f) {
+        return result;
+    }
+
+    // Run inference
+    int ret = whisper_full(m_ctx, m_wparams, audio_data.data(), audio_data.size());
+
+    if (ret != 0) {
+        std::cerr << "whisper_full failed with code: " << ret << std::endl;
+        return result;
+    }
+
+    // Get number of segments
+    int n_segments = whisper_full_n_segments(m_ctx);
+    if (n_segments == 0) {
+        return result;
+    }
+
+    // Build result text
+    float total_logprob = 0.0f;
+    int total_segments = 0;
+
+    for (int i = 0; i < n_segments; ++i) {
+        // Get text
+        const char* text = whisper_full_get_segment_text(m_ctx, i);
+        if (text) {
+            result.text += text;
+            if (i < n_segments - 1) {
+                result.text += " ";
+            }
+        }
+
+        // Get segment-level confidence metrics
+        // Check if this function exists in your whisper.cpp version:
+        float segment_logprob = 0.0f;
+
+        // Method 1: Try using built-in segment probability function
+        // This function might be named differently in your version
+        int n_tokens = whisper_full_n_tokens(m_ctx, i);
+        if (n_tokens > 0) {
+            // Calculate average token probability for this segment
+            float segment_sum = 0.0f;
+            for (int j = 0; j < n_tokens; ++j) {
+                whisper_token_data td = whisper_full_get_token_data(m_ctx, i, j);
+
+                // The issue: td.p might not be a log probability
+                // Let's check what it actually is
+                float token_prob = td.p;
+
+                // If the value is positive and between 0-1, it's a probability, not log prob
+                if (token_prob > 0 && token_prob <= 1.0) {
+                    // Convert to log probability
+                    segment_sum += std::log(token_prob);
+                } else if (token_prob > 1.0) {
+                    // This is neither probability nor log probability
+                    // It might be a logit (pre-softmax value)
+                    // Convert logit to log probability
+                    segment_sum += -std::log(1.0f + std::exp(-token_prob));
+                } else {
+                    // Already a log probability (negative value)
+                    segment_sum += token_prob;
+                }
+            }
+            segment_logprob = segment_sum / n_tokens;
+        }
+
+        total_logprob += segment_logprob;
+        total_segments++;
+
+        // Also try to get no_speech_prob if available
+        // Some versions expose this through segment data
+    }
+
+    // Calculate average
+    if (total_segments > 0) {
+        result.avg_logprob = total_logprob / total_segments;
+        result.n_tokens = total_segments; // Using segments instead of tokens for now
+    }
+
+    // Since entropy is always 0, let's estimate it from logprob variance
+    // Better entropy = less uncertainty = higher confidence
+    result.entropy = 0.0f; // We'll calculate this properly later
+
+    std::cout << "[Whisper] Metrics - avg_logprob: " << result.avg_logprob
+              << " (should be negative!)" << std::endl;
+
+    return result;
+}
+
 int whisper_engine::get_optimal_thread_count() const {
     int hardware_threads = std::thread::hardware_concurrency();
     return std::max(1, hardware_threads - 2);

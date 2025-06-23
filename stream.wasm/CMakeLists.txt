@@ -119,11 +119,3 @@ foreach(f ${FILES_TO_COPY})
                 ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/models/${f}
     )
 endforeach()
-
-# Post-build: Show output size
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E echo "WASM module size:"
-    COMMAND ls -lh ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${PROJECT_NAME}.wasm || true
-    COMMAND ${CMAKE_COMMAND} -E echo "JS file size:"
-    COMMAND ls -lh ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${PROJECT_NAME}.js || true
-)

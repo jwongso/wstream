@@ -156,50 +156,251 @@ header p {
 }
 
 .transcription-container {
-    margin-top: 30px;
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    margin-bottom: 20px;
 }
 
-.transcription-container h2 {
-    font-size: 1.5em;
+.transcription-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     margin-bottom: 15px;
-    color: #333;
+}
+
+.transcription-header h2 {
+    margin: 0;
 }
 
 .transcription-box {
-    background: #f8f9fa;
-    border-radius: 10px;
-    padding: 20px;
     min-height: 200px;
     max-height: 400px;
     overflow-y: auto;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    padding: 15px;
     margin-bottom: 15px;
-    font-family: 'Courier New', monospace;
+    background: #fafafa;
 }
 
+.transcription-options {
+    display: flex;
+    gap: 20px;
+    padding-top: 10px;
+    border-top: 1px solid #e0e0e0;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 0.9em;
+    color: #555;
+    user-select: none;
+}
+
+.checkbox-label:hover {
+    color: #333;
+}
+
+.checkbox-label input[type="checkbox"] {
+    cursor: pointer;
+}
+
+/* Clear button styling */
+.btn-secondary {
+    background: #6c757d;
+    color: white;
+    padding: 6px 16px;
+    font-size: 0.9em;
+}
+
+.btn-secondary:hover {
+    background: #5a6268;
+}
+
+/* Transcription entries */
 .transcription-entry {
-    margin-bottom: 10px;
-    padding: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    padding: 10px;
+    background: white;
     border-radius: 4px;
-    background: rgba(0, 0, 0, 0.05);
+    border: 1px solid #eee;
+    transition: all 0.2s;
 }
 
 .transcription-entry:hover {
-    background: rgba(0, 0, 0, 0.08);
+    border-color: #ddd;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
-.timestamp {
-    color: #666;
+.transcription-text {
+    flex: 1;
+    color: #333;
+    margin-right: 15px;
+    line-height: 1.4;
+}
+
+.transcription-metrics {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-shrink: 0;
+    font-size: 0.85em;
+}
+
+.transcription-metrics.hidden {
+    display: none;
+}
+
+.metric {
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-family: 'Courier New', monospace;
     font-size: 0.9em;
-    margin-right: 8px;
+    white-space: nowrap;
 }
 
-.info {
-    margin-top: 30px;
+.transcription-options {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 20px;
+    padding-top: 10px;
+    border-top: 1px solid #e0e0e0;
+}
+
+/* Filtered out entries */
+.transcription-entry.filtered-out {
+    display: none;
+}
+
+/* Visual indicator for filtered entries count */
+.filter-status {
+    padding: 8px 12px;
+    background: #fff3cd;
+    border: 1px solid #ffeeba;
+    border-radius: 4px;
+    color: #856404;
+    font-size: 0.9em;
+    margin-bottom: 10px;
+    display: none;
+}
+
+.filter-status.active {
+    display: block;
+}
+
+/* Highlight entries close to filter threshold */
+.transcription-entry.near-threshold {
+    background: #fffbf0;
+    border-color: #ffc107;
+}
+
+/* Confidence color coding */
+.metric.confidence-excellent {
+    background: #4caf50;
+    color: white;
+}
+
+.metric.confidence-good {
+    background: #8bc34a;
+    color: white;
+}
+
+.metric.confidence-fair {
+    background: #ff9800;
+    color: white;
+}
+
+.metric.confidence-poor {
+    background: #f44336;
+    color: white;
+}
+
+/* Visual indicators for transcription confidence */
+.transcription-entry.high-confidence {
+    border-left: 3px solid #4caf50;
+}
+
+.transcription-entry.medium-confidence {
+    border-left: 3px solid #ff9800;
+}
+
+.transcription-entry.low-confidence {
+    border-left: 3px solid #f44336;
+    opacity: 0.8;
+}
+
+/* Other metrics styling */
+.metric.logprob {
+    background: #e1f5fe;
+    color: #01579b;
+}
+
+.metric.entropy {
+    background: #fce4ec;
+    color: #880e4f;
+}
+
+/* Confidence filter */
+.confidence-filter {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-left: auto;
+}
+
+.confidence-filter label {
+    font-size: 0.9em;
+    color: #555;
+    font-weight: 500;
+}
+
+.confidence-filter input[type="number"] {
+    width: 70px;
+    padding: 4px 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 0.9em;
     text-align: center;
-    color: #666;
-    font-size: 0.9em;
 }
 
-.info p {
-    margin: 5px 0;
+.confidence-filter input[type="number"]:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.1);
+}
+
+.confidence-filter-hint {
+    font-size: 0.85em;
+    color: #666;
+    font-style: italic;
+}
+
+/* Filtered out entries */
+.transcription-entry.filtered-out {
+    display: none;
+}
+
+/* Filter status message */
+.filter-status {
+    padding: 8px 12px;
+    background: #fff3cd;
+    border: 1px solid #ffeeba;
+    border-radius: 4px;
+    color: #856404;
+    font-size: 0.9em;
+    margin-bottom: 10px;
+    display: none;
+}
+
+.filter-status.active {
+    display: block;
 }

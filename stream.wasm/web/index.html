@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WStream ASR - WebAssembly Demo</title>
+    <title>wstream ASR - WebAssembly Demo</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>🎤 WStream ASR</h1>
+            <h1>🎤 wstream ASR</h1>
             <p>Real-time Speech Recognition in Your Browser</p>
         </header>
 
@@ -35,9 +35,30 @@
         </div>
 
         <div class="transcription-container">
-            <h2>Transcription</h2>
+            <div class="transcription-header">
+                <h2>Transcription</h2>
+                <button id="clearBtn" class="btn btn-secondary">Clear</button>
+            </div>
             <div id="transcription" class="transcription-box"></div>
-            <button id="clearBtn" class="btn btn-secondary">Clear</button>
+            <div class="transcription-options">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="showMetrics" checked>
+                    <span>Show Metrics</span>
+                </label>
+                <div class="confidence-filter">
+                    <label for="confidenceFilter">Min Confidence:</label>
+                    <input type="number"
+                        id="confidenceFilter"
+                        min="0"
+                        max="100"
+                        step="5"
+                        value="0"
+                        title="Only show transcriptions with confidence above this value">
+                    <span class="confidence-filter-hint">
+                        <span id="confidenceFilterValue">0</span>%
+                    </span>
+                </div>
+            </div>
         </div>
 
         <div class="info">

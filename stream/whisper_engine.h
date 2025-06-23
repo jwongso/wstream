@@ -16,13 +16,13 @@
 #include <vector>
 #include <memory>
 
-/**
- * @file whisper_engine.h
- * @brief Speech recognition engine using OpenAI's Whisper model
- * @author WStream Development Team
- * @version 1.0
- * @date 2024
- */
+struct transcription_result {
+    std::string text;
+    float avg_logprob = 0.0f;      // Average log probability (higher = better)
+    float no_speech_prob = 0.0f;   // Probability of no speech (lower = better)
+    float entropy = 0.0f;           // Entropy (lower = more confident)
+    int n_tokens = 0;               // Number of tokens
+};
 
 /**
  * @class whisper_engine
@@ -166,6 +166,8 @@ public:
      * - Multiple short segments often process faster than single long segments
      */
     std::string transcribe(const std::vector<float>& audio_data);
+
+    transcription_result transcribe_with_confidence(const std::vector<float>& audio_data);
 
     /**
      * @brief Checks if the engine is properly initialized

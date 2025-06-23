@@ -15,6 +15,15 @@
 class whisper_engine;
 class text_processor;
 
+struct TranscriptionMetrics {
+    float confidence = 0.0f;     // 0-100 confidence score
+    float avg_logprob = 0.0f;    // Raw average log probability
+    float entropy = 0.0f;         // Entropy (uncertainty)
+    int n_tokens = 0;             // Number of tokens
+    float rtf = 0.0f;             // Keep RTF for performance monitoring
+    float audio_duration = 0.0f;  // Audio duration in seconds
+};
+
 class wstream_app_wasm {
 public:
     using TranscriptionCallback = std::function<void(const std::string&)>;
@@ -37,6 +46,7 @@ public:
     void start();
     void stop();
     bool is_running() const;
+    std::string get_confidence_metrics() const;
 
     // Get latest transcription (for polling from JS)
     std::string get_transcribed();
@@ -63,8 +73,10 @@ private:
     std::unique_ptr<text_processor> m_text_processor;
     std::string m_model_path;
     TranscriptionCallback m_transcription_callback;
+    mutable TranscriptionMetrics m_last_metrics;
 
     // Worker thread function
     void worker_main();
     void set_status_internal(const std::string& status);
+    float calculate_confidence_score(float avg_logprob, float entropy);
 };

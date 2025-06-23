@@ -6,61 +6,6 @@
 #include <chrono>
 #include <emscripten.h>
 
-class simple_vad {
-private:
-    static constexpr float ENERGY_THRESHOLD = 0.01f;
-    static constexpr float FREQ_THRESHOLD = 0.02f;
-    static constexpr int MIN_VOICE_FRAMES = 800; // 50ms at 16kHz
-
-public:
-    static bool has_voice_activity(const std::vector<float>& audio) {
-        if (audio.size() < MIN_VOICE_FRAMES) {
-            return false;
-        }
-
-        // Calculate RMS energy
-        float energy = 0.0f;
-        float max_amplitude = 0.0f;
-
-        for (const auto& sample : audio) {
-            energy += sample * sample;
-            max_amplitude = std::max(max_amplitude, std::abs(sample));
-        }
-
-        energy = std::sqrt(energy / audio.size());
-
-        // Check if audio has sufficient energy and peak amplitude
-        return energy > ENERGY_THRESHOLD && max_amplitude > FREQ_THRESHOLD;
-    }
-
-    // Find voice segments in audio
-    static std::pair<size_t, size_t> find_voice_bounds(const std::vector<float>& audio) {
-        const size_t window_size = 1600; // 100ms windows
-        size_t start = 0;
-        size_t end = audio.size();
-
-        // Find start of voice
-        for (size_t i = 0; i < audio.size() - window_size; i += window_size/2) {
-            std::vector<float> window(audio.begin() + i, audio.begin() + i + window_size);
-            if (has_voice_activity(window)) {
-                start = i;
-                break;
-            }
-        }
-
-        // Find end of voice
-        for (size_t i = audio.size(); i > window_size; i -= window_size/2) {
-            std::vector<float> window(audio.begin() + i - window_size, audio.begin() + i);
-            if (has_voice_activity(window)) {
-                end = i;
-                break;
-            }
-        }
-
-        return {start, end};
-    }
-};
-
 wstream_app_wasm::wstream_app_wasm(const std::string& model_path)
     : m_model_path(model_path) {
 }
@@ -143,91 +88,133 @@ void wstream_app_wasm::worker_main() {
     std::vector<float> processing_buffer;
     processing_buffer.reserve(AUDIO_WINDOW_SAMPLES);
 
+    // Smart buffering parameters
+    const size_t MIN_PROCESS_SAMPLES = 16000;   // 1 second minimum
+    const size_t IDEAL_PROCESS_SAMPLES = 48000; // 3 seconds ideal
+    const size_t MAX_PROCESS_SAMPLES = 80000;   // 5 seconds maximum
+    const size_t OVERLAP_SAMPLES = 4800;        // 300ms overlap for context
+
+    auto last_process_time = std::chrono::steady_clock::now();
+    const auto MIN_PROCESS_INTERVAL = std::chrono::milliseconds(1500); // Don't process too frequently
+
     while (m_is_running) {
+        size_t buffer_size = 0;
+
         {
             std::unique_lock<std::mutex> lock(m_mutex);
 
-            // Wait for audio data
-            m_cv.wait(lock, [this] {
-                return !m_is_running || m_audio_buffer.size() >= 16000; // At least 1 second
+            // Wait for audio with timeout
+            m_cv.wait_for(lock, std::chrono::milliseconds(500), [this, &buffer_size] {
+                buffer_size = m_audio_buffer.size();
+                return !m_is_running || buffer_size >= MIN_PROCESS_SAMPLES;
             });
 
             if (!m_is_running) {
                 break;
             }
 
-            // Take the last window_samples for processing
-            size_t samples_to_take = std::min(
-                static_cast<size_t>(AUDIO_WINDOW_SAMPLES),
-                m_audio_buffer.size()
-            );
+            buffer_size = m_audio_buffer.size();
 
-            if (samples_to_take < 16000) { // Less than 1 second
+            // Determine if we should process
+            auto now = std::chrono::steady_clock::now();
+            auto time_since_last = now - last_process_time;
+
+            bool should_process = false;
+            size_t samples_to_process = 0;
+
+            if (buffer_size >= MAX_PROCESS_SAMPLES) {
+                // Buffer is getting full, must process
+                should_process = true;
+                samples_to_process = MAX_PROCESS_SAMPLES;
+            } else if (buffer_size >= IDEAL_PROCESS_SAMPLES &&
+                      time_since_last >= MIN_PROCESS_INTERVAL) {
+                // Ideal amount of audio and enough time has passed
+                should_process = true;
+                samples_to_process = IDEAL_PROCESS_SAMPLES;
+            } else if (buffer_size >= MIN_PROCESS_SAMPLES &&
+                      time_since_last >= std::chrono::seconds(3)) {
+                // Been waiting too long, process what we have
+                should_process = true;
+                samples_to_process = buffer_size;
+            }
+
+            if (!should_process) {
                 continue;
             }
 
-            // Copy audio data for processing
-            processing_buffer.clear();
+            // Extract audio for processing
+            samples_to_process = std::min(samples_to_process, buffer_size);
             processing_buffer.assign(
-                m_audio_buffer.end() - samples_to_take,
+                m_audio_buffer.end() - samples_to_process,
                 m_audio_buffer.end()
             );
 
-            // Clear old audio to prevent unbounded growth
-            m_audio_buffer.clear();
-        }
+            // Smart buffer management: keep some overlap for context
+            if (buffer_size > samples_to_process && samples_to_process > OVERLAP_SAMPLES) {
+                // Keep the overlap at the beginning
+                m_audio_buffer.erase(
+                    m_audio_buffer.begin(),
+                    m_audio_buffer.end() - OVERLAP_SAMPLES
+                );
+            } else {
+                // Not enough for overlap, clear everything
+                m_audio_buffer.clear();
+            }
 
-        // Skip if no voice activity
-        if (!simple_vad::has_voice_activity(processing_buffer)) {
-            set_status_internal("waiting for speech...");
-            continue;
+            last_process_time = now;
         }
-
-        // Find voice boundaries to process only speech
-        auto [start, end] = simple_vad::find_voice_bounds(processing_buffer);
-        if (end - start < 8000) { // Less than 0.5 seconds
-            continue;
-        }
-
-        // Process only the part with voice
-        std::vector<float> voice_segment(
-            processing_buffer.begin() + start,
-            processing_buffer.begin() + end
-        );
 
         // Process audio outside of lock
         set_status_internal("processing...");
 
         auto t_start = std::chrono::high_resolution_clock::now();
 
-        // Transcribe
-        std::string transcription = m_whisper_engine->transcribe(voice_segment);
+        // Transcribe the audio
+        //std::string transcription = m_whisper_engine->transcribe(processing_buffer);
+        auto result = m_whisper_engine->transcribe_with_confidence(processing_buffer);
 
-        auto t_end = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration<double>(t_end - t_start).count();
+        if (!result.text.empty() && result.n_tokens > 0) {
+            float confidence = calculate_confidence_score(result.avg_logprob, result.entropy);
 
-        std::cout << "[Worker] Processed " << processing_buffer.size()
-                  << " samples in " << duration << " seconds" << std::endl;
+            // Skip very low confidence results
+            if (confidence < 30.0f) {
+                std::cout << "[Worker] Skipping low confidence result: " << confidence << "%" << std::endl;
+                continue;
+            }
 
-        if (!transcription.empty()) {
-            // Process through text processor
-            std::string processed_text = m_text_processor->process(transcription);
+            auto t_end = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration<double>(t_end - t_start).count();
+
+            // Calculate real-time factor
+            double audio_duration = processing_buffer.size() / 16000.0;
+            double rtf = duration / audio_duration;
+
+            // Update stats
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_last_metrics.confidence = confidence;
+                m_last_metrics.avg_logprob = result.avg_logprob;
+                m_last_metrics.entropy = result.entropy;
+                m_last_metrics.n_tokens = result.n_tokens;
+                m_last_metrics.rtf = rtf;
+                m_last_metrics.audio_duration = audio_duration;
+            }
+
+            // Process text
+            std::string processed_text = m_text_processor->process(result.text);
 
             if (!processed_text.empty()) {
-                // Store transcription
-                {
-                    std::lock_guard<std::mutex> lock(m_mutex);
-                    m_latest_transcription = processed_text;
-                }
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_latest_transcription = processed_text;
 
                 // Call callback if set
                 if (m_transcription_callback) {
                     m_transcription_callback(processed_text);
                 }
             }
-        }
 
-        set_status_internal("waiting for audio...");
+            set_status_internal("waiting for audio...");
+        }
     }
 
     std::cout << "[Worker] Thread stopped" << std::endl;
@@ -261,4 +248,63 @@ void wstream_app_wasm::set_transcription_callback(TranscriptionCallback callback
 
 bool wstream_app_wasm::is_running() const {
     return m_is_running;
+}
+
+float wstream_app_wasm::calculate_confidence_score(float avg_logprob, float entropy) {
+    std::cout << "[Confidence] Input - avg_logprob: " << avg_logprob
+              << ", entropy: " << entropy << std::endl;
+
+    float confidence = 0.0f;
+
+    // Since we're getting positive values (0.17 to 0.69),
+    // let's treat them as quality scores from 0 to 1
+    if (avg_logprob > 0) {
+        // Map positive values directly to confidence
+        // Values seem to range from 0.17 to 0.69
+        // Let's map: 0.0-0.2 = poor, 0.2-0.4 = fair, 0.4-0.6 = good, 0.6+ = excellent
+
+        if (avg_logprob >= 0.6) {
+            confidence = 85.0f + (avg_logprob - 0.6f) * 37.5f; // 85-100%
+        } else if (avg_logprob >= 0.4) {
+            confidence = 70.0f + ((avg_logprob - 0.4f) / 0.2f) * 15.0f; // 70-85%
+        } else if (avg_logprob >= 0.2) {
+            confidence = 50.0f + ((avg_logprob - 0.2f) / 0.2f) * 20.0f; // 50-70%
+        } else {
+            confidence = avg_logprob * 250.0f; // 0-50%
+        }
+    } else {
+        // Proper negative log probabilities
+        if (avg_logprob >= -0.1f) {
+            confidence = 95.0f;
+        } else if (avg_logprob >= -0.5f) {
+            confidence = 80.0f + ((avg_logprob + 0.5f) / 0.4f) * 15.0f;
+        } else if (avg_logprob >= -1.0f) {
+            confidence = 60.0f + ((avg_logprob + 1.0f) / 0.5f) * 20.0f;
+        } else if (avg_logprob >= -2.0f) {
+            confidence = 30.0f + ((avg_logprob + 2.0f) / 1.0f) * 30.0f;
+        } else {
+            confidence = std::max(0.0f, 30.0f + (avg_logprob + 2.0f) * 10.0f);
+        }
+    }
+
+    // Clamp to 0-100 range
+    confidence = std::min(100.0f, std::max(0.0f, confidence));
+
+    std::cout << "[Confidence] Output - confidence: " << confidence << "%" << std::endl;
+
+    return confidence;
+}
+
+std::string wstream_app_wasm::get_confidence_metrics() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    std::ostringstream json;
+    json << "{";
+    json << "\"confidence\":" << m_last_metrics.confidence << ",";
+    json << "\"avg_logprob\":" << m_last_metrics.avg_logprob << ",";
+    json << "\"entropy\":" << m_last_metrics.entropy << ",";
+    json << "\"n_tokens\":" << m_last_metrics.n_tokens;
+    json << "}";
+
+    return json.str();
 }
