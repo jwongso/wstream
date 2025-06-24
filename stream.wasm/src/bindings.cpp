@@ -105,6 +105,83 @@ std::string get_confidence_metrics(size_t handle) {
     return it->second->get_confidence_metrics();
 }
 
+std::string merge_transcription(const std::string& existing, const std::string& new_text, int max_lookback_words = 8) {
+    int best_match_index = -1;
+
+    auto merge_strings = [](std::string_view a, std::string_view b, int& best_match_index, int max_lookback_words) -> std::string {
+        if (a.empty()) return std::string(b);
+        if (b.empty()) return std::string(a);
+
+        auto split = [](std::string_view str) {
+            std::vector<std::string_view> words;
+            size_t start = 0;
+            while (start < str.size()) {
+                size_t end = str.find(' ', start);
+                if (end == std::string_view::npos) end = str.size();
+                if (end > start) words.push_back(str.substr(start, end - start));
+                start = end + 1;
+            }
+            return words;
+        };
+
+        const auto base = split(a);
+        const auto tail = split(b);
+
+        const int recent_start = std::max(0, static_cast<int>(base.size()) - max_lookback_words);
+        best_match_index = -1;
+
+        // Phase 1: Bigram matching
+        if (tail.size() >= 2) {
+            for (int i = static_cast<int>(base.size()) - 2; i >= recent_start; --i) {
+                if (i + 1 >= static_cast<int>(base.size())) continue;
+                if (base[i] == tail[0] && base[i+1] == tail[1]) {
+                    best_match_index = i;
+                    break;
+                }
+            }
+        }
+
+        // Phase 2: Unigram fallback
+        if (best_match_index == -1 && !tail.empty()) {
+            for (int i = static_cast<int>(base.size()) - 1; i >= recent_start; --i) {
+                if (base[i] == tail[0]) {
+                    best_match_index = i;
+                    break;
+                }
+            }
+        }
+
+        // Merge logic
+        std::string result;
+        if (best_match_index >= 0) {
+            size_t pos = 0;
+            for (int i = 0; i < best_match_index; ++i) {
+                pos += base[i].size();
+                if (i < best_match_index - 1) {
+                    pos += 1;
+                }
+            }
+            result = std::string(a.substr(0, pos));
+            if (!b.empty()) {
+                if (!result.empty() && result.back() != ' ') {
+                    result += ' ';
+                }
+                result += b;
+            }
+        } else {
+            result = std::string(a);
+            if (!result.empty() && !b.empty()) {
+                if (result.back() != ' ') result += ' ';
+                result += b;
+            }
+        }
+
+        return result;
+    };
+
+    return merge_strings(existing, new_text, best_match_index, max_lookback_words);
+}
+
 EMSCRIPTEN_BINDINGS(wstream_module) {
     function("init", &init);
     function("free_instance", &free_instance);
@@ -113,4 +190,5 @@ EMSCRIPTEN_BINDINGS(wstream_module) {
     function("get_status", &get_status);
     function("set_status", &set_status);
     function("get_confidence_metrics", &get_confidence_metrics);
+    function("merge_transcription", &merge_transcription);
 }
