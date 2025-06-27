@@ -79,13 +79,13 @@ endif()
 
 # Check if PortAudio was found by any method
 if(PortAudio_FOUND)
-    set(PORTAUDIO_LIBRARIES "${PORTAUDIO_LIBRARY_DIRS}/lib${PORTAUDIO_LIBRARIES}.dylib")
     message(STATUS "PortAudio found via find_package: ${PortAudio_LIBRARIES}")
     set(PORTAUDIO_INCLUDE_DIR ${PortAudio_INCLUDE_DIRS})
     set(PORTAUDIO_LIBRARIES ${PortAudio_LIBRARIES})
     set(PORTAUDIO_FOUND TRUE)
 elseif(PORTAUDIO_FOUND)
-    message(STATUS "PortAudio found via pkg-config or manual search ${PORTAUDIO_LIBRARIES}")
+    set(PORTAUDIO_LIBRARIES "${PORTAUDIO_LIBRARY_DIRS}/lib${PORTAUDIO_LIBRARIES}.dylib")
+    message(STATUS "PortAudio found via pkg-config or manual search")
 else()
     message(FATAL_ERROR "PortAudio not found. Please install PortAudio development files:
     - macOS: brew install portaudio
