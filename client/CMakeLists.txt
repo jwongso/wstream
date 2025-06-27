@@ -19,40 +19,42 @@ set(SOURCES
     base64.cpp
 )
 
-# Multi-method PortAudio detection
-# Method 1: Try standard CMake find_package
-find_package(PortAudio QUIET)
-
-# Method 2: Try pkg-config if Method 1 failed
-if(NOT PortAudio_FOUND)
-    find_package(PkgConfig QUIET)
-    if(PKG_CONFIG_FOUND)
-        pkg_check_modules(PORTAUDIO QUIET portaudio-2.0)
+find_package(PkgConfig QUIET)
+if(PKG_CONFIG_FOUND)
+    pkg_check_modules(PORTAUDIO portaudio-2.0)
+    if(PORTAUDIO_FOUND)
+        message(STATUS "PortAudio found via pkg-config")
+        set(PORTAUDIO_INCLUDE_DIR ${PORTAUDIO_INCLUDE_DIRS})
+        set(PORTAUDIO_LIBRARIES ${PORTAUDIO_LINK_LIBRARIES})
     endif()
 endif()
 
-# Method 3: Manual search if Methods 1 and 2 failed
-if(NOT PortAudio_FOUND AND NOT PORTAUDIO_FOUND)
+# Method 2: Manual search if pkg-config failed
+if(NOT PORTAUDIO_FOUND)
     message(STATUS "Searching for PortAudio manually...")
 
     # Define search paths based on platform
     if(APPLE)
-        set(PORTAUDIO_SEARCH_PATHS
-            /usr/local
-            /opt/homebrew
-            /opt/local
-            ${CMAKE_SOURCE_DIR}/external/portaudio
-        )
+        # Check if we're on Apple Silicon
+        if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+            set(PORTAUDIO_SEARCH_PATHS
+                /opt/homebrew
+                /usr/local
+                /opt/local
+                ${CMAKE_SOURCE_DIR}/external/portaudio
+            )
+        else()
+            set(PORTAUDIO_SEARCH_PATHS
+                /usr/local
+                /opt/homebrew
+                /opt/local
+                ${CMAKE_SOURCE_DIR}/external/portaudio
+            )
+        endif()
     elseif(UNIX)
         set(PORTAUDIO_SEARCH_PATHS
             /usr
             /usr/local
-            ${CMAKE_SOURCE_DIR}/external/portaudio
-        )
-    elseif(WIN32)
-        set(PORTAUDIO_SEARCH_PATHS
-            "C:/Program Files/PortAudio"
-            "C:/Program Files (x86)/PortAudio"
             ${CMAKE_SOURCE_DIR}/external/portaudio
         )
     endif()
@@ -62,34 +64,31 @@ if(NOT PortAudio_FOUND AND NOT PORTAUDIO_FOUND)
         NAMES portaudio.h
         PATHS ${PORTAUDIO_SEARCH_PATHS}
         PATH_SUFFIXES include
+        NO_DEFAULT_PATH
     )
 
-    # Find library
-    find_library(PORTAUDIO_LIBRARIES
+    # Find library with full path
+    find_library(PORTAUDIO_LIBRARY_PATH
         NAMES portaudio
         PATHS ${PORTAUDIO_SEARCH_PATHS}
         PATH_SUFFIXES lib lib64
+        NO_DEFAULT_PATH
     )
 
-    if(PORTAUDIO_INCLUDE_DIR AND PORTAUDIO_LIBRARIES)
+    if(PORTAUDIO_INCLUDE_DIR AND PORTAUDIO_LIBRARY_PATH)
         set(PORTAUDIO_FOUND TRUE)
-        message(STATUS "PortAudio found manually: ${PORTAUDIO_LIBRARIES}")
+        set(PORTAUDIO_LIBRARIES ${PORTAUDIO_LIBRARY_PATH})
+        message(STATUS "PortAudio found manually:")
+        message(STATUS "  Include: ${PORTAUDIO_INCLUDE_DIR}")
+        message(STATUS "  Library: ${PORTAUDIO_LIBRARIES}")
     endif()
 endif()
 
-# Check if PortAudio was found by any method
-if(PortAudio_FOUND)
-    message(STATUS "PortAudio found via find_package: ${PortAudio_LIBRARIES}")
-    set(PORTAUDIO_INCLUDE_DIR ${PortAudio_INCLUDE_DIRS})
-    set(PORTAUDIO_LIBRARIES ${PortAudio_LIBRARIES})
-    set(PORTAUDIO_FOUND TRUE)
-elseif(PORTAUDIO_FOUND)
-    message(STATUS "PortAudio found via pkg-config or manual search")
-else()
-    message(FATAL_ERROR "PortAudio not found. Please install PortAudio development files:
+# Check if PortAudio was found
+if(NOT PORTAUDIO_FOUND)
+    message(FATAL_ERROR "PortAudio not found. Please install PortAudio:
     - macOS: brew install portaudio
-    - Linux: sudo apt-get install portaudio19-dev
-    - Windows: Download from http://www.portaudio.com/")
+    - Linux: sudo apt-get install portaudio19-dev")
 endif()
 
 # Create executable
