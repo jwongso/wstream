@@ -19,25 +19,6 @@ set(SOURCES
     base64.cpp
 )
 
-# Find WebSocket++ (header-only)
-find_path(WEBSOCKETPP_INCLUDE_DIR
-    NAMES websocketpp/config/asio_no_tls.hpp
-    PATHS
-        /usr/include
-        /usr/local/include
-        /opt/homebrew/include
-        /opt/local/include
-        ${CMAKE_SOURCE_DIR}/external/websocketpp
-)
-
-if(NOT WEBSOCKETPP_INCLUDE_DIR)
-    message(WARNING "WebSocket++ not found in standard paths. Checking for bundled version...")
-    set(WEBSOCKETPP_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/external/websocketpp)
-    if(NOT EXISTS ${WEBSOCKETPP_INCLUDE_DIR}/websocketpp/config/asio_no_tls.hpp)
-        message(FATAL_ERROR "WebSocket++ not found. Install with: brew install websocketpp (macOS) or sudo apt-get install libwebsocketpp-dev (Linux)")
-    endif()
-endif()
-
 # Multi-method PortAudio detection
 # Method 1: Try standard CMake find_package
 find_package(PortAudio QUIET)
@@ -117,7 +98,6 @@ add_executable(${PROJECT_NAME} ${SOURCES})
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${WEBSOCKETPP_INCLUDE_DIR}
     ${PORTAUDIO_INCLUDE_DIR}
 )
 

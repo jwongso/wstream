@@ -1,27 +1,29 @@
 #pragma once
 
-#include <websocketpp/config/asio_no_tls.hpp>
-#include <websocketpp/client.hpp>
+#include <boost/beast/core.hpp>
+#include <boost/beast/websocket.hpp>
+#include <boost/asio/connect.hpp>
+#include <boost/asio/ip/tcp.hpp>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <functional>
 #include <atomic>
 #include <thread>
 #include <mutex>
+#include <memory>
 
+namespace beast = boost::beast;
+namespace websocket = beast::websocket;
+namespace net = boost::asio;
+using tcp = boost::asio::ip::tcp;
 using json = nlohmann::json;
 
 /**
  * @class websocket_client
- * @brief WebSocket client for connecting to wstream server
+ * @brief WebSocket client for connecting to wstream server (Boost.Beast implementation)
  */
 class websocket_client {
 public:
-    /// Client type definition
-    using client_t = websocketpp::client<websocketpp::config::asio>;
-    using connection_ptr = client_t::connection_ptr;
-    using message_ptr = client_t::message_ptr;
-
     /// Transcription callback type
     using transcription_callback_t = std::function<void(const std::string&)>;
 
@@ -99,7 +101,7 @@ public:
      * @brief Check if connected
      * @return true if connected, false otherwise
      */
-    bool is_connected() const { return m_connected; }
+    bool is_connected() const { return m_connected.load(); }
 
     /**
      * @brief Toggle verbose mode for debugging
@@ -114,11 +116,11 @@ public:
     void set_use_base64(bool use_base64) { m_use_base64 = use_base64; }
 
 private:
-    /// WebSocket client instance
-    client_t m_client;
+    /// IO context
+    net::io_context m_ioc;
 
-    /// Connection handle
-    websocketpp::connection_hdl m_connection_hdl;
+    /// WebSocket stream
+    std::unique_ptr<websocket::stream<tcp::socket>> m_ws;
 
     /// Client thread
     std::unique_ptr<std::thread> m_client_thread;
@@ -144,38 +146,24 @@ private:
     bool m_use_base64 = true;
 
     /**
-     * @brief Handle connection open
-     * @param hdl Connection handle
-     */
-    void on_open(websocketpp::connection_hdl hdl);
-
-    /**
-     * @brief Handle connection close
-     * @param hdl Connection handle
-     */
-    void on_close(websocketpp::connection_hdl hdl);
-
-    /**
-     * @brief Handle incoming message
-     * @param hdl Connection handle
-     * @param msg Message pointer
-     */
-    void on_message(websocketpp::connection_hdl hdl, message_ptr msg);
-
-    /**
-     * @brief Handle connection failure
-     * @param hdl Connection handle
-     */
-    void on_fail(websocketpp::connection_hdl hdl);
-
-    /**
      * @brief Client thread function
      */
     void client_thread_func();
 
     /**
-    * @brief Logs debug message if verbose mode is enabled
-    * @param message Message to log
-    */
+     * @brief Read messages from server
+     */
+    void read_messages();
+
+    /**
+     * @brief Parse and handle incoming message
+     * @param message Received message
+     */
+    void handle_message(const std::string& message);
+
+    /**
+     * @brief Log debug message if verbose mode is enabled
+     * @param message Message to log
+     */
     void debug_log(const std::string& message);
 };
