@@ -16,37 +16,40 @@
 #include "common.h"
 #include "common-whisper.h"
 #include "concurrentqueue.h"
+#include "audio_source.h"
+#include "audio_source_factory.h"
 #include <memory>
 #include <atomic>
 #include <string>
 #include <vector>
 #include <thread>
 #include <filesystem>
+#include <mutex>
 
 namespace fs = std::filesystem;
 
 // Forward declarations
 class websocket_server;
-class audio_processor;
 class whisper_engine;
 class text_processor;
+class websocket_audio_source;
 
 /**
  * @class wstream_app
  * @brief Main application class that coordinates all components for real-time audio transcription
  *
  * This class serves as the central coordinator for the WStream application, managing:
- * - Audio capture and processing
+ * - Single audio source (SDL2 microphone or WebSocket clients) via factory pattern
  * - Whisper-based speech recognition
  * - Text processing and filtering
- * - WebSocket server for real-time broadcasting
+ * - WebSocket server for real-time broadcasting and client communication
  *
- * The application follows a modular design where each component has specific responsibilities
- * and communicates through well-defined interfaces.
+ * The application uses a factory pattern to create the appropriate audio source at startup,
+ * ensuring only the necessary components are instantiated and resources are used efficiently.
  *
  * @par Usage Example:
  * @code
- * wstream_app app("path/to/model.bin");
+ * wstream_app app("path/to/model.bin", audio_source_type::WEBSOCKET_CLIENT);
  * if (app.initialize(argc, argv)) {
  *     app.run();
  * }
@@ -57,11 +60,21 @@ public:
     /// Default model path for Whisper
     static constexpr const char* DEFAULT_MODEL_PATH = "models/ggml-small.en-q5_1.bin";
 
+    /// Default WebSocket server port
+    static constexpr uint16_t DEFAULT_WEBSOCKET_PORT = 8080;
+
+    /// Static pointer to current instance for signal handler
+    static wstream_app* s_instance;
+
     /**
-     * @brief Constructs a new wstream_app object
+     * @brief Constructs wstream_app with specified audio source type
      * @param model_path Path to the Whisper model file (default: DEFAULT_MODEL_PATH)
+     * @param source_type Type of audio source to use (default: SDL_MICROPHONE)
+     * @param websocket_port Port for WebSocket server (default: DEFAULT_WEBSOCKET_PORT)
      */
-    explicit wstream_app(const std::string& model_path = DEFAULT_MODEL_PATH);
+    explicit wstream_app(const std::string& model_path = DEFAULT_MODEL_PATH,
+                         audio_source_type source_type = audio_source_type::SDL_MICROPHONE,
+                         uint16_t websocket_port = DEFAULT_WEBSOCKET_PORT);
 
     /**
      * @brief Destructor - ensures clean shutdown of all components
@@ -77,15 +90,14 @@ public:
     /**
      * @brief Initializes all application components
      * @param argc Command line argument count
-     * @param argv Command line arguments (argv[1] can specify custom model path)
+     * @param argv Command line arguments
      * @return true if initialization successful, false otherwise
      *
-     * This method:
-     * - Validates and sets the model path
-     * - Initializes the Whisper engine
-     * - Sets up audio processing
-     * - Starts the WebSocket server
-     * - Configures text processing
+     * Command line arguments:
+     * - argv[1]: Optional custom model path
+     * - --audio-source <type>: Audio source type (microphone, websocket)
+     * - --port <port>: WebSocket server port
+     * - --help: Display help information
      */
     bool initialize(int argc, char* argv[]);
 
@@ -93,7 +105,7 @@ public:
      * @brief Starts the main application loop
      *
      * This method runs the main processing loop that:
-     * - Captures audio samples
+     * - Captures audio samples from the configured source
      * - Processes them through Whisper
      * - Filters and cleans the transcribed text
      * - Broadcasts results to connected WebSocket clients
@@ -110,18 +122,57 @@ public:
      * - Shuts down WebSocket server
      * - Releases Whisper resources
      * - Cleans up SDL
+     * - Exits the process after a timeout
      */
     void shutdown();
+
+    /**
+     * @brief Gets the active audio source type
+     * @return Current audio source type
+     */
+    audio_source_type get_audio_source_type() const { return m_audio_source_type; }
+
+    /**
+     * @brief Gets the active audio source name
+     * @return Human-readable name of the current audio source
+     */
+    std::string get_audio_source_name() const;
+
+    /**
+     * @brief Handles incoming audio data from WebSocket clients
+     * @param samples PCM audio samples (16-bit)
+     * @param session_id Client session identifier
+     * @param language Language hint (optional)
+     *
+     * This method is called by the WebSocket server when audio data
+     * is received from a client. Only functional when using WEBSOCKET_CLIENT
+     * audio source type.
+     */
+    void handle_websocket_audio(const std::vector<int16_t>& samples,
+                                const std::string& session_id = "",
+                                const std::string& language = "");
+
+    /**
+     * @brief Gets the latest transcription result
+     * @return Latest transcription text, empty if none available
+     *
+     * This method is thread-safe and can be called from external threads
+     * to retrieve the most recent transcription result.
+     */
+    std::string get_latest_transcription();
+
+    /**
+     * @brief Checks if the application is currently running
+     * @return true if running, false otherwise
+     */
+    bool is_running() const { return m_is_running; }
 
 private:
     /// Atomic flag controlling the main application loop
     std::atomic<bool> m_is_running{true};
 
-    /// WebSocket server for broadcasting transcriptions
+    /// WebSocket server for broadcasting transcriptions and receiving audio
     std::unique_ptr<websocket_server> m_websocket_server;
-
-    /// Audio capture and preprocessing component
-    std::unique_ptr<audio_processor> m_audio_processor;
 
     /// Whisper speech recognition engine
     std::unique_ptr<whisper_engine> m_whisper_engine;
@@ -132,8 +183,21 @@ private:
     /// Path to the Whisper model file
     std::string m_model_path;
 
-    /// Static pointer to current instance for signal handler
-    static wstream_app* s_instance;
+    /// WebSocket server port
+    uint16_t m_websocket_port;
+
+    /// Audio source type being used
+    audio_source_type m_audio_source_type;
+
+    /// The single active audio source
+    std::unique_ptr<audio_source> m_audio_source;
+
+    /// WebSocket audio source reference (if using WebSocket)
+    websocket_audio_source* m_websocket_audio_source = nullptr;
+
+    /// Latest transcription result (thread-safe access)
+    std::string m_latest_transcription;
+    std::mutex m_transcription_mutex;
 
     /**
      * @brief Validates that a model file exists and is accessible
@@ -146,10 +210,36 @@ private:
      * @brief Main audio processing loop
      *
      * Continuously:
-     * - Retrieves processed audio samples
+     * - Retrieves processed audio samples from the active source
      * - Runs speech recognition
      * - Processes and filters text
      * - Queues results for broadcasting
      */
     void process_audio_loop();
+
+    /**
+     * @brief Parses command line arguments
+     * @param argc Argument count
+     * @param argv Argument values
+     * @return true if parsing successful, false if help was requested or error occurred
+     */
+    bool parse_command_line(int argc, char* argv[]);
+
+    /**
+     * @brief Displays help information
+     * @param program_name Name of the program executable
+     */
+    void show_help(const std::string& program_name);
+
+    /**
+     * @brief Sets up WebSocket server with appropriate callbacks
+     * @return true if setup successful, false otherwise
+     */
+    bool setup_websocket_server();
+
+    /**
+     * @brief Updates the latest transcription in a thread-safe manner
+     * @param transcription New transcription text
+     */
+    void update_latest_transcription(const std::string& transcription);
 };

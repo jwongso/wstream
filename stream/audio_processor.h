@@ -13,14 +13,16 @@
 
 #include "common-sdl.h"
 #include "whisper.h"
+#include "audio_source.h"
 #include <vector>
 #include <memory>
+#include <atomic>
 
 /**
  * @file audio_processor.h
  * @brief Audio capture and preprocessing for real-time speech recognition
  * @author WStream Development Team
- * @version 1.0
+ * @version 2.0
  * @date 2024
  */
 
@@ -39,11 +41,14 @@
  * In continuous mode, audio is processed in fixed-time segments with overlap.
  * In VAD mode, processing is triggered only when speech is detected.
  *
+ * Implements the audio_source interface for seamless integration with the
+ * audio source switching system.
+ *
  * @par Thread Safety:
  * This class is not thread-safe. External synchronization is required if
  * accessed from multiple threads.
  */
-class audio_processor {
+class audio_processor : public audio_source {
 public:
     /// Default step size in milliseconds for continuous processing
     static constexpr int DEFAULT_STEP_MS = 3000;
@@ -130,7 +135,53 @@ public:
     /**
      * @brief Destructor - ensures audio resources are properly released
      */
-    ~audio_processor();
+    ~audio_processor() override;
+
+    //
+    // audio_source interface implementation
+    //
+
+    /**
+     * @brief Initializes audio capture system (audio_source interface)
+     * @return true if initialization successful, false otherwise
+     */
+    bool initialize() override { return initialize(-1); }
+
+    /**
+     * @brief Starts audio capture (audio_source interface)
+     * @return true if started successfully, false otherwise
+     */
+    bool start() override { resume(); return true; }
+
+    /**
+     * @brief Stops audio capture (audio_source interface)
+     */
+    void stop() override { pause(); }
+
+    /**
+     * @brief Retrieves processed audio samples (audio_source interface)
+     * @param[out] samples Vector to store the retrieved audio samples
+     * @return true if samples were retrieved, false if no samples available
+     */
+    bool get_audio_samples(std::vector<float>& samples) override {
+        return get_processed_samples(samples);
+    }
+
+    /**
+     * @brief Gets the name/identifier of this audio source (audio_source interface)
+     * @return String identifier for this audio source
+     */
+    std::string get_name() const override { return "SDL Microphone"; }
+
+    /**
+     * @brief Checks if the audio source is active (audio_source interface)
+     * @return true if active and providing samples, false otherwise
+     */
+    bool is_active() const override { return m_is_active; }
+
+    //
+    // Original audio_processor interface
+    //
 
     /**
      * @brief Initializes audio capture system
@@ -141,7 +192,7 @@ public:
      * The audio system will be configured to use the sample rate
      * and buffer sizes specified in the configuration.
      */
-    bool initialize(int device_id = -1);
+    bool initialize(int device_id);
 
     /**
      * @brief Pauses audio capture
@@ -207,6 +258,9 @@ private:
 
     /// Number of samples to keep for context between steps
     int m_n_samples_keep;
+
+    /// Flag indicating if audio capture is active
+    std::atomic<bool> m_is_active{false};
 
     /**
      * @brief Processes audio in continuous mode (fixed time intervals)

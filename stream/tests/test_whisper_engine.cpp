@@ -16,7 +16,7 @@ protected:
     void SetUp() override {
         // Try multiple possible model paths
         std::vector<std::string> possible_paths = {
-            "models/ggml-base.en.bin"
+            "models/ggml-tiny.en.bin"
         };
 
         bool model_found = false;

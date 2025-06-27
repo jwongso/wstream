@@ -2,6 +2,7 @@
 //
 // Copyright (C) all of the contributors. All rights reserved.
 //
+//
 // This software, including documentation, is protected by copyright controlled by
 // contributors. All rights are reserved. Copying, including reproducing, storing,
 // adapting or translating, any or all of this material requires the prior written
@@ -11,9 +12,9 @@
 
 #include "wstream_app.h"
 #include "websocket_server.h"
-#include "audio_processor.h"
 #include "whisper_engine.h"
 #include "text_processor.h"
+#include "websocket_audio_source.h"
 #include <iostream>
 #include <chrono>
 #include <csignal>
@@ -25,20 +26,29 @@ std::atomic<bool> g_shutdown_requested{false};
 // Static flag for signal handler
 static std::atomic<bool> s_sigint_received{false};
 
+// Static instance pointer for signal handler
+wstream_app* wstream_app::s_instance = nullptr;
+
 // Signal handler
 static void signal_handler(int signal) {
     if (signal == SIGINT || signal == SIGTERM) {
         s_sigint_received = true;
         g_shutdown_requested = true;
+
+        if (wstream_app::s_instance) {
+            std::cout << "\nReceived signal " << signal << ", shutting down..." << std::endl;
+        }
     }
 }
 
-wstream_app::wstream_app(const std::string& model_path)
-    : m_model_path(model_path) {
+wstream_app::wstream_app(const std::string& model_path, audio_source_type source_type, uint16_t websocket_port)
+    : m_model_path(model_path), m_websocket_port(websocket_port), m_audio_source_type(source_type) {
+    s_instance = this;
 }
 
 wstream_app::~wstream_app() {
     shutdown();
+    s_instance = nullptr;
 }
 
 bool wstream_app::initialize(int argc, char* argv[]) {
@@ -49,41 +59,164 @@ bool wstream_app::initialize(int argc, char* argv[]) {
     std::signal(SIGPIPE, SIG_IGN);
 #endif
 
-    if (argc > 1) {
-        std::string user_path = argv[1];
-        if (validate_model_path(user_path)) {
-            m_model_path = user_path;
-        } else {
-            std::cerr << "Warning: Provided model path '" << user_path
-                      << "' does not exist. Using default.\n";
-        }
+    // Parse command line arguments
+    if (!parse_command_line(argc, argv)) {
+        return false;
     }
 
+    std::cout << "Initializing WStream with audio source: " << get_audio_source_name() << std::endl;
+
+    // Validate model path
+    if (!validate_model_path(m_model_path)) {
+        std::cerr << "Model file not found: " << m_model_path << std::endl;
+        return false;
+    }
+
+    // Initialize Whisper engine
     m_whisper_engine = std::make_unique<whisper_engine>(m_model_path);
     if (!m_whisper_engine->initialize()) {
-        std::cerr << "Failed to initialize Whisper engine.\n";
+        std::cerr << "Failed to initialize Whisper engine." << std::endl;
         return false;
     }
 
-    m_audio_processor = std::make_unique<audio_processor>();
-    if (!m_audio_processor->initialize()) {
-        std::cerr << "Failed to initialize audio processor.\n";
-        return false;
-    }
-
+    // Initialize text processor
     m_text_processor = std::make_unique<text_processor>();
-    m_websocket_server = std::make_unique<websocket_server>();
-    m_websocket_server->start();
+
+    // Create the audio source using factory
+    m_audio_source = audio_source_factory::create(m_audio_source_type);
+    if (!m_audio_source) {
+        std::cerr << "Failed to create audio source: " << get_audio_source_name() << std::endl;
+        return false;
+    }
+
+    // Store typed reference for WebSocket audio source
+    if (m_audio_source_type == audio_source_type::WEBSOCKET_CLIENT) {
+        m_websocket_audio_source = static_cast<websocket_audio_source*>(m_audio_source.get());
+    }
+
+    // Setup WebSocket server
+    if (!setup_websocket_server()) {
+        std::cerr << "Failed to setup WebSocket server." << std::endl;
+        return false;
+    }
+
+    std::cout << "WStream initialized successfully." << std::endl;
+    return true;
+}
+
+bool wstream_app::parse_command_line(int argc, char* argv[]) {
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+
+        if (arg == "--help" || arg == "-h") {
+            show_help(argv[0]);
+            return false;
+        } else if (arg == "--audio-source" && i + 1 < argc) {
+            m_audio_source_type = audio_source_factory::parse_type(argv[++i]);
+        } else if (arg == "--port" && i + 1 < argc) {
+            try {
+                m_websocket_port = static_cast<uint16_t>(std::stoi(argv[++i]));
+            } catch (const std::exception& e) {
+                std::cerr << "Invalid port number: " << argv[i] << std::endl;
+                return false;
+            }
+        } else if (arg.find("--") == 0) {
+            std::cerr << "Unknown option: " << arg << std::endl;
+            show_help(argv[0]);
+            return false;
+        } else {
+            // Assume it's a model path
+            m_model_path = arg;
+        }
+    }
 
     return true;
 }
 
+void wstream_app::show_help(const std::string& program_name) {
+    std::cout << "Usage: " << program_name << " [options] [model_path]\n\n";
+    std::cout << "Options:\n";
+    std::cout << "  --audio-source <type>  Audio source type (microphone, websocket) [default: microphone]\n";
+    std::cout << "  --port <port>          WebSocket server port [default: " << DEFAULT_WEBSOCKET_PORT << "]\n";
+    std::cout << "  --help, -h             Show this help message\n\n";
+    std::cout << "Arguments:\n";
+    std::cout << "  model_path             Path to Whisper model file [default: " << DEFAULT_MODEL_PATH << "]\n\n";
+    std::cout << "Audio source types:\n";
+    std::cout << "  microphone, sdl, mic   Use local microphone via SDL2\n";
+    std::cout << "  websocket, ws, client  Receive audio from WebSocket clients\n\n";
+    std::cout << "Examples:\n";
+    std::cout << "  " << program_name << "                                    # Use default settings\n";
+    std::cout << "  " << program_name << " --audio-source websocket           # Use WebSocket audio\n";
+    std::cout << "  " << program_name << " --port 9090 models/base.en.bin     # Custom port and model\n";
+}
+
 bool wstream_app::validate_model_path(const std::string& path) {
-    return fs::exists(path);
+    return fs::exists(path) && fs::is_regular_file(path);
+}
+
+bool wstream_app::setup_websocket_server() {
+    m_websocket_server = std::make_unique<websocket_server>(m_websocket_port);
+
+    // Set up audio callback for WebSocket audio source
+    if (m_audio_source_type == audio_source_type::WEBSOCKET_CLIENT) {
+        m_websocket_server->set_audio_callback(
+            [this](const audio_data& audio, websocket::stream<tcp::socket>* client_ws) {
+                handle_websocket_audio(audio.samples, audio.session_id, audio.language);
+
+                // Send acknowledgment back to client
+                if (client_ws) {
+                    nlohmann::json ack_response;
+                    ack_response["type"] = "audio_ack";
+                    ack_response["status"] = "received";
+                    ack_response["samples_count"] = audio.samples.size();
+                    ack_response["session_id"] = audio.session_id;
+
+                    m_websocket_server->send_to_client(client_ws, ack_response);
+                }
+            }
+            );
+    }
+
+    // Set up command handler for client commands
+    m_websocket_server->set_command_handler(
+        [this](const std::string& command, const nlohmann::json& params, websocket::stream<tcp::socket>* client_ws) -> nlohmann::json {
+            nlohmann::json response;
+            response["type"] = "response";
+            response["action"] = command;
+
+            if (command == "get_status") {
+                response["status"] = "success";
+                response["audio_source"] = audio_source_factory::type_to_string(m_audio_source_type);
+                response["audio_source_name"] = get_audio_source_name();
+                response["is_running"] = is_running();
+                response["client_count"] = m_websocket_server->get_client_count();
+            } else if (command == "get_transcription") {
+                response["status"] = "success";
+                response["transcription"] = get_latest_transcription();
+            } else {
+                response["status"] = "error";
+                response["message"] = "Unknown command: " + command;
+            }
+
+            return response;
+        }
+        );
+
+    m_websocket_server->start();
+    return true;
 }
 
 void wstream_app::run() {
-    m_audio_processor->resume();
+    // Start the audio source
+    if (!m_audio_source->start()) {
+        std::cerr << "Failed to start audio source: " << get_audio_source_name() << std::endl;
+        return;
+    }
+
+    std::cout << "WStream is running. Audio source: " << get_audio_source_name() << std::endl;
+    std::cout << "WebSocket server listening on port " << m_websocket_port << std::endl;
+    std::cout << "Press Ctrl+C to stop." << std::endl;
+
     process_audio_loop();
 }
 
@@ -94,7 +227,7 @@ void wstream_app::process_audio_loop() {
         // Check SDL events (window close)
         m_is_running = sdl_poll_events();
 
-        // Also check for SIGINT
+        // Check for SIGINT
         if (s_sigint_received) {
             std::cout << "\nShutdown requested (CTRL-C)..." << std::endl;
             m_is_running = false;
@@ -105,31 +238,76 @@ void wstream_app::process_audio_loop() {
             break;
         }
 
-        if (!m_audio_processor->get_processed_samples(audio_samples)) {
+        // Get audio from the active source
+        if (!m_audio_source->get_audio_samples(audio_samples)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
 
         if (audio_samples.empty()) continue;
 
+        // Get session info from audio source
+        std::string session_id = m_audio_source->get_session_id();
+        std::string language = m_audio_source->get_language();
+
+        // Process with whisper
         std::string transcription = m_whisper_engine->transcribe(audio_samples);
 
         if (!transcription.empty()) {
             std::string processed_text = m_text_processor->process(transcription);
 
             if (!processed_text.empty()) {
-                std::cout << processed_text << std::endl;
-                m_websocket_server->queue_transcription(processed_text);
+                std::cout << "[" << get_audio_source_name() << "] " << processed_text << std::endl;
+
+                // Update latest transcription
+                update_latest_transcription(processed_text);
+
+                // Broadcast to WebSocket clients
+                if (!session_id.empty()) {
+                    m_websocket_server->queue_transcription(processed_text, session_id);
+                } else {
+                    m_websocket_server->queue_transcription(processed_text);
+                }
             }
         }
+
+        audio_samples.clear();
     }
 }
 
+std::string wstream_app::get_audio_source_name() const {
+    return audio_source_factory::get_type_name(m_audio_source_type);
+}
+
+void wstream_app::handle_websocket_audio(const std::vector<int16_t>& samples,
+                                         const std::string& session_id,
+                                         const std::string& language) {
+    if (m_websocket_audio_source) {
+        m_websocket_audio_source->handle_audio_data(samples, session_id, language);
+    }
+}
+
+std::string wstream_app::get_latest_transcription() {
+    std::lock_guard<std::mutex> lock(m_transcription_mutex);
+    std::string result = m_latest_transcription;
+    m_latest_transcription.clear(); // Clear after reading
+    return result;
+}
+
+void wstream_app::update_latest_transcription(const std::string& transcription) {
+    std::lock_guard<std::mutex> lock(m_transcription_mutex);
+    m_latest_transcription = transcription;
+}
+
 void wstream_app::shutdown() {
-    if (m_audio_processor) {
-        m_audio_processor->pause();
+    std::cout << "Shutting down WStream..." << std::endl;
+
+    // Stop audio source
+    if (m_audio_source) {
+        m_audio_source->stop();
     }
 
+    // Stop WebSocket server
     if (m_websocket_server) {
         m_websocket_server->stop();
     }

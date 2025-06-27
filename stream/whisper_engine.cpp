@@ -11,7 +11,46 @@
 
 #include "whisper_engine.h"
 #include <thread>
+#include <cmath>
 #include <iostream>
+#include <algorithm>
+#include <string.h>
+
+bool is_repetitive_text(const std::string& text) {
+    if (text.length() < 4) return false;
+
+    // Check for simple repetitions (e.g., "aa", "abab", etc.)
+    const size_t half_len = text.length() / 2;
+    if (half_len > 0) {
+        std::string first_half = text.substr(0, half_len);
+        std::string second_half = text.substr(half_len, half_len);
+        if (first_half == second_half) {
+            return true;
+        }
+    }
+
+    // Check for character repetition (e.g., "aaaa", "....", etc.)
+    char first_char = text[0];
+    bool all_same = true;
+    for (char c : text) {
+        if (c != first_char) {
+            all_same = false;
+            break;
+        }
+    }
+
+    return all_same;
+}
+
+float calculate_entropy(const std::vector<float>& probabilities) {
+    float entropy = 0.0f;
+    for (float p : probabilities) {
+        if (p > 1e-10f) {  // Avoid log(0)
+            entropy -= p * std::log2(p);
+        }
+    }
+    return entropy;
+}
 
 whisper_engine::whisper_engine(const std::string& model_path, const config& cfg)
     : m_model_path(model_path), m_config(cfg) {
@@ -46,48 +85,46 @@ bool whisper_engine::initialize(bool wasm) {
 
 void whisper_engine::setup_whisper_params() {
     m_wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+
+    m_wparams.print_special = false;
+    m_wparams.print_progress = false;
+    m_wparams.print_realtime = false;
+    m_wparams.print_timestamps = false;
+    m_wparams.suppress_blank = true;
+    m_wparams.no_context = true;
+    m_wparams.translate = false;
+    m_wparams.temperature = 0.0f;
+
     if (m_wasm) {
-        // Core performance settings
-        m_wparams.n_threads = 4; // Sweet spot for browsers
-        m_wparams.audio_ctx = 512; // Reduced from 768
-
-        // Token and context limits
-        m_wparams.max_tokens = 64; // Increased from 32
-        m_wparams.max_len = 0; // No max length
-
-        // Quality thresholds - these are standard
+        m_wparams.n_threads = 4;
+        m_wparams.audio_ctx = 512;
+        m_wparams.max_tokens = 64;
+        m_wparams.max_len = 0;
         m_wparams.entropy_thold = 2.4f;
         m_wparams.logprob_thold = -1.0f;
         m_wparams.no_speech_thold = 0.6f;
-
-        // Temperature settings
         m_wparams.temperature = 0.0f;
-        m_wparams.temperature_inc = -1.0f; // Disable fallback
-
-        // Standard flags that exist in all versions
-        m_wparams.print_special = false;
-        m_wparams.print_progress = false;
-        m_wparams.print_realtime = false;
-        m_wparams.print_timestamps = false;
-        m_wparams.suppress_blank = true;
+        m_wparams.temperature_inc = -1.0f;
         m_wparams.single_segment = true;
-        m_wparams.no_context = true;
-        m_wparams.translate = false;
-
-        // Language
         m_wparams.language = "en";
     }
     else {
-        m_wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-        m_wparams.print_progress = false;
-        m_wparams.print_realtime = false;
-        m_wparams.no_context = true;
+        // Native optimizations
         m_wparams.language = m_config.language.c_str();
         m_wparams.n_threads = m_config.n_threads > 0 ? m_config.n_threads : get_optimal_thread_count();
-        m_wparams.temperature = m_config.temperature;
         m_wparams.single_segment = !m_config.use_vad;
         m_wparams.max_tokens = m_config.max_tokens;
         m_wparams.audio_ctx = 0;
+
+        m_wparams.no_context = true;
+
+        // Additional anti-repetition settings
+        m_wparams.entropy_thold = 2.4f;     // Skip low-entropy (repetitive) outputs
+        m_wparams.logprob_thold = -1.0f;    // Skip low-confidence outputs
+        m_wparams.no_speech_thold = 0.6f;   // Skip segments that are likely not speech
+
+        // Use temperature fallback only if needed
+        m_wparams.temperature_inc = m_config.temperature > 0.0f ? 0.2f : -1.0f;
     }
 }
 
@@ -102,14 +139,18 @@ std::string whisper_engine::transcribe(const std::vector<float>& audio_data) {
     }
 
     // Check if audio has actual content (not just silence)
-    float max_val = 0.0f;
-    for (const auto& sample : audio_data) {
-        max_val = std::max(max_val, std::abs(sample));
-    }
+    const float silence_threshold = 0.001f;
+    const float max_val = *std::max_element(audio_data.begin(),
+                                            audio_data.end(),
+                                            [](float a, float b) {
+                                return std::abs(a) < std::abs(b);
+                            });
 
-    if (max_val < 0.001f) {
+    if (std::abs(max_val) < silence_threshold) {
         return "";
     }
+
+    whisper_reset_timings(m_ctx);
 
     // Run inference
     int ret = whisper_full(m_ctx, m_wparams, audio_data.data(), audio_data.size());
@@ -121,18 +162,23 @@ std::string whisper_engine::transcribe(const std::vector<float>& audio_data) {
 
     // Get number of segments
     int n_segments = whisper_full_n_segments(m_ctx);
-
     if (n_segments == 0) {
         return "";
     }
 
     // Build result string
     std::string result;
+    result.reserve(n_segments * 20);
     for (int i = 0; i < n_segments; ++i) {
         const char* text = whisper_full_get_segment_text(m_ctx, i);
-        result += text;
-        if (i < n_segments - 1) {
-            result += " ";
+        if (text && strlen(text) > 0) {
+            std::string segment_text(text);
+            if (segment_text.length() > 1 && !is_repetitive_text(segment_text)) {
+                if (!result.empty()) {
+                    result += " ";
+                }
+                result += segment_text;
+            }
         }
     }
 
@@ -146,15 +192,17 @@ transcription_result whisper_engine::transcribe_with_confidence(const std::vecto
         return result;
     }
 
-    // Check for silence
-    float max_val = 0.0f;
-    for (const auto& sample : audio_data) {
-        max_val = std::max(max_val, std::abs(sample));
-    }
+    // OPTIMIZATION: More efficient silence detection
+    const float silence_threshold = 0.001f;
+    const float max_val = *std::max_element(audio_data.begin(), audio_data.end(),
+                                            [](float a, float b) { return std::abs(a) < std::abs(b); });
 
-    if (max_val < 0.001f) {
+    if (std::abs(max_val) < silence_threshold) {
         return result;
     }
+
+    // CRITICAL: Reset context state before processing
+    whisper_reset_timings(m_ctx);
 
     // Run inference
     int ret = whisper_full(m_ctx, m_wparams, audio_data.data(), audio_data.size());
@@ -170,78 +218,78 @@ transcription_result whisper_engine::transcribe_with_confidence(const std::vecto
         return result;
     }
 
-    // Build result text
+    // OPTIMIZATION: Pre-allocate string
+    result.text.reserve(n_segments * 20);
+
+    // Process segments with confidence calculation
     float total_logprob = 0.0f;
-    int total_segments = 0;
+    int total_tokens = 0;
+    std::vector<float> segment_probs;  // For entropy calculation
+    segment_probs.reserve(n_segments);
 
     for (int i = 0; i < n_segments; ++i) {
-        // Get text
         const char* text = whisper_full_get_segment_text(m_ctx, i);
-        if (text) {
-            result.text += text;
-            if (i < n_segments - 1) {
-                result.text += " ";
-            }
+        if (!text || strlen(text) == 0) continue;
+
+        std::string segment_text(text);
+
+        // OPTIMIZATION: Skip repetitive segments
+        if (segment_text.length() <= 1 || is_repetitive_text(segment_text)) {
+            continue;
         }
 
-        // Get segment-level confidence metrics
-        // Check if this function exists in your whisper.cpp version:
-        float segment_logprob = 0.0f;
+        // Add to result
+        if (!result.text.empty()) {
+            result.text += " ";
+        }
+        result.text += segment_text;
 
-        // Method 1: Try using built-in segment probability function
-        // This function might be named differently in your version
+        // Calculate confidence metrics
+        float segment_logprob = 0.0f;
         int n_tokens = whisper_full_n_tokens(m_ctx, i);
+
         if (n_tokens > 0) {
-            // Calculate average token probability for this segment
             float segment_sum = 0.0f;
             for (int j = 0; j < n_tokens; ++j) {
                 whisper_token_data td = whisper_full_get_token_data(m_ctx, i, j);
-
-                // The issue: td.p might not be a log probability
-                // Let's check what it actually is
                 float token_prob = td.p;
 
-                // If the value is positive and between 0-1, it's a probability, not log prob
-                if (token_prob > 0 && token_prob <= 1.0) {
-                    // Convert to log probability
-                    segment_sum += std::log(token_prob);
-                } else if (token_prob > 1.0) {
-                    // This is neither probability nor log probability
-                    // It might be a logit (pre-softmax value)
-                    // Convert logit to log probability
-                    segment_sum += -std::log(1.0f + std::exp(-token_prob));
+                // OPTIMIZATION: Improved probability handling
+                float log_prob;
+                if (token_prob > 0 && token_prob <= 1.0f) {
+                    log_prob = std::log(std::max(token_prob, 1e-10f));  // Prevent log(0)
+                } else if (token_prob > 1.0f) {
+                    log_prob = -std::log(1.0f + std::exp(-token_prob));
                 } else {
-                    // Already a log probability (negative value)
-                    segment_sum += token_prob;
+                    log_prob = token_prob;
                 }
+
+                segment_sum += log_prob;
             }
             segment_logprob = segment_sum / n_tokens;
+            segment_probs.push_back(std::exp(segment_logprob));  // Convert back to prob for entropy
         }
 
         total_logprob += segment_logprob;
-        total_segments++;
-
-        // Also try to get no_speech_prob if available
-        // Some versions expose this through segment data
+        total_tokens += n_tokens;
     }
 
-    // Calculate average
-    if (total_segments > 0) {
-        result.avg_logprob = total_logprob / total_segments;
-        result.n_tokens = total_segments; // Using segments instead of tokens for now
+    // Calculate final metrics
+    if (total_tokens > 0) {
+        result.avg_logprob = total_logprob / total_tokens;
+        result.n_tokens = total_tokens;
+
+        // OPTIMIZATION: Calculate entropy from segment probabilities
+        if (!segment_probs.empty()) {
+            result.entropy = calculate_entropy(segment_probs);
+        }
     }
-
-    // Since entropy is always 0, let's estimate it from logprob variance
-    // Better entropy = less uncertainty = higher confidence
-    result.entropy = 0.0f; // We'll calculate this properly later
-
-    std::cout << "[Whisper] Metrics - avg_logprob: " << result.avg_logprob
-              << " (should be negative!)" << std::endl;
 
     return result;
 }
 
 int whisper_engine::get_optimal_thread_count() const {
     int hardware_threads = std::thread::hardware_concurrency();
-    return std::max(1, hardware_threads - 2);
+    return std::max(1, hardware_threads <= 4 ?
+                           hardware_threads - 1 : hardware_threads - RESERVED_THREADS);
 }

@@ -41,6 +41,8 @@ set(LIB_SOURCES
     whisper_engine.cpp
     text_processor.cpp
     websocket_server.cpp
+    websocket_audio_source.cpp
+    audio_source_factory.cpp
 )
 
 set(LIB_HEADERS
@@ -49,6 +51,9 @@ set(LIB_HEADERS
     whisper_engine.h
     text_processor.h
     websocket_server.h
+    audio_source.h
+    websocket_audio_source.h
+    audio_source_factory.h
 )
 
 add_library(${LIB_TARGET} STATIC ${LIB_SOURCES} ${LIB_HEADERS})
@@ -86,6 +91,10 @@ if(BUILD_TESTS)
         tests/test_whisper_engine.cpp
         tests/test_websocket_server.cpp
         tests/test_wstream_app.cpp
+        tests/test_audio_source.cpp
+        tests/test_websocket_audio_source.cpp
+        tests/test_audio_processor_source.cpp
+        tests/test_websocket_sever_command.cpp
     )
 
     add_executable(${TEST_TARGET} ${TEST_SOURCES})
