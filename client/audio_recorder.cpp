@@ -161,6 +161,18 @@ int audio_recorder::pa_callback(const void* input, void* output,
 
     const int16_t* inputBuffer = static_cast<const int16_t*>(input);
     const size_t numSamples = frameCount * CHANNELS;
+
+    if (recorder->m_dump_enabled) {
+        std::lock_guard<std::mutex> lock(recorder->m_dump_mutex);
+        if (recorder->m_audio_dump_file.is_open()) {
+            recorder->m_audio_dump_file.write(
+                reinterpret_cast<const char*>(inputBuffer),
+                numSamples * sizeof(int16_t)
+                );
+            recorder->m_audio_dump_file.flush(); // Force write to disk
+        }
+    }
+
     static int silence_counter = 0;
     static int callback_counter = 0;
     callback_counter++;
@@ -190,16 +202,6 @@ int audio_recorder::pa_callback(const void* input, void* output,
         std::lock_guard<std::mutex> lock(recorder->m_buffer_mutex);
         for (size_t i = 0; i < numSamples; ++i) {
             recorder->m_buffer.push_back(inputBuffer[i]);
-        }
-    }
-
-    if (recorder->m_dump_enabled) {
-        std::lock_guard<std::mutex> lock(recorder->m_dump_mutex);
-        if (recorder->m_audio_dump_file.is_open()) {
-            recorder->m_audio_dump_file.write(
-                reinterpret_cast<const char*>(inputBuffer),
-                numSamples * sizeof(int16_t)
-                );
         }
     }
 

@@ -280,14 +280,56 @@ int main(int argc, char* argv[]) {
                 std::cout << "Usage: verbose <on|off>" << std::endl;
             }
         } else if (command == "test audio") {
+            // Check if already recording
+            bool was_recording = recorder.is_recording();
+
+            // Start recording if not already active
+            if (!was_recording) {
+                std::cout << "Starting recording for test..." << std::endl;
+                if (!recorder.start_recording(audio_callback)) {
+                    std::cout << "Failed to start recording for test" << std::endl;
+                    continue;
+                }
+                // Give it a moment to start
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+
+            // Enable dump
             recorder.enable_audio_dump("test_audio.raw");
             std::cout << "Recording 5 seconds of audio to test_audio.raw..." << std::endl;
+            std::cout << "Speak now..." << std::endl;
+
+            // Record for 5 seconds
             std::this_thread::sleep_for(std::chrono::seconds(5));
+
+            // Disable dump
             recorder.disable_audio_dump();
-            std::cout << "Test complete. You can play the file with:" << std::endl;
-            std::cout << "  ffplay -f s16le -ar 16000 -ac 1 test_audio.raw" << std::endl;
-        }
-        else {
+
+            // Stop recording if we started it just for the test
+            if (!was_recording) {
+                recorder.stop_recording();
+                std::cout << "Stopped test recording" << std::endl;
+            }
+
+            // Check file size
+            std::ifstream test_file("test_audio.raw", std::ios::binary | std::ios::ate);
+            if (test_file.is_open()) {
+                auto file_size = test_file.tellg();
+                test_file.close();
+                std::cout << "Test complete. File size: " << file_size << " bytes" << std::endl;
+
+                if (file_size > 0) {
+                    std::cout << "You can play the file with:" << std::endl;
+                    std::cout << "  ffplay -f s16le -ar 16000 -ac 1 test_audio.raw" << std::endl;
+                    std::cout << "Or convert to WAV:" << std::endl;
+                    std::cout << "  ffmpeg -f s16le -ar 16000 -ac 1 -i test_audio.raw test_audio.wav" << std::endl;
+                } else {
+                    std::cout << "WARNING: File is empty. Microphone may not be working or accessible." << std::endl;
+                }
+            } else {
+                std::cout << "ERROR: Could not open test file" << std::endl;
+            }
+        } else {
             std::cout << "Unknown command: " << command << std::endl;
             std::cout << "Type 'help' for available commands" << std::endl;
         }

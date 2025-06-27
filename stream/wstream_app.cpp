@@ -267,19 +267,33 @@ void wstream_app::process_audio_loop() {
             break;
         }
 
-        // Get audio from the active source
-        if (!m_audio_source->get_audio_samples(audio_samples)) {
+        if (m_switching_source) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+
+        // Safely get audio from the active source
+        bool got_audio = false;
+        std::string session_id;
+        std::string language;
+
+        {
+            std::lock_guard<std::mutex> lock(m_audio_source_mutex);
+            if (m_audio_source && !m_switching_source) {
+                got_audio = m_audio_source->get_audio_samples(audio_samples);
+                if (got_audio && !audio_samples.empty()) {
+                    session_id = m_audio_source->get_session_id();
+                    language = m_audio_source->get_language();
+                }
+            }
+        }
+
+        if (!got_audio || audio_samples.empty()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
 
-        if (audio_samples.empty()) continue;
-
-        // Get session info from audio source
-        std::string session_id = m_audio_source->get_session_id();
-        std::string language = m_audio_source->get_language();
-
-        // Process with whisper
+        // Process with whisper (outside the lock)
         std::string transcription = m_whisper_engine->transcribe(audio_samples);
 
         if (!transcription.empty()) {
@@ -305,6 +319,7 @@ void wstream_app::process_audio_loop() {
 }
 
 std::string wstream_app::get_audio_source_name() const {
+    std::lock_guard<std::mutex> lock(m_audio_source_mutex);
     return audio_source_factory::get_type_name(m_audio_source_type);
 }
 
@@ -321,6 +336,14 @@ bool wstream_app::set_audio_source_runtime(audio_source_type source_type) {
 }
 
 bool wstream_app::switch_audio_source(audio_source_type new_source_type) {
+    // Set switching flag to pause the main loop
+    m_switching_source = true;
+
+    // Wait a bit for the main loop to stop accessing the audio source
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Now safe to switch
+    std::lock_guard<std::mutex> lock(m_audio_source_mutex);
     // Stop current audio source
     if (m_audio_source) {
         m_audio_source->stop();
@@ -351,9 +374,18 @@ bool wstream_app::switch_audio_source(audio_source_type new_source_type) {
         return false;
     }
 
+    // Clear the old source first (this will destroy it)
+    m_audio_source.reset();
+
+    // Small delay to ensure destruction is complete
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
     // Switch to new source
     m_audio_source = std::move(new_audio_source);
     m_audio_source_type = new_source_type;
+
+    // Clear the switching flag
+    m_switching_source = false;
 
     // Update typed references
     m_websocket_audio_source = nullptr;
@@ -384,6 +416,7 @@ std::unique_ptr<audio_source> wstream_app::create_audio_source(audio_source_type
 void wstream_app::handle_websocket_audio(const std::vector<int16_t>& samples,
                                          const std::string& session_id,
                                          const std::string& language) {
+    std::lock_guard<std::mutex> lock(m_audio_source_mutex);
     if (m_websocket_audio_source) {
         m_websocket_audio_source->handle_audio_data(samples, session_id, language);
     }

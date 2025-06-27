@@ -209,6 +209,10 @@ private:
     std::string m_latest_transcription;
     std::mutex m_transcription_mutex;
 
+    /// Switching audio source mutex
+    mutable std::mutex m_audio_source_mutex;
+    std::atomic<bool> m_switching_source{false};
+
     /**
      * @brief Validates that a model file exists and is accessible
      * @param path Path to validate
