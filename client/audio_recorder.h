@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <deque>
+#include <fstream>
 
 /**
  * @class audio_recorder_pa
@@ -71,6 +72,9 @@ public:
      */
     std::vector<std::string> list_devices();
 
+    void enable_audio_dump(const std::string& filename);
+    void disable_audio_dump();
+
 private:
     /// PortAudio stream
     PaStream* m_stream = nullptr;
@@ -92,6 +96,10 @@ private:
 
     /// Device index
     int m_device_index = -1;
+
+    std::ofstream m_audio_dump_file;
+    std::mutex m_dump_mutex;
+    bool m_dump_enabled = false;
 
     /**
      * @brief PortAudio callback function

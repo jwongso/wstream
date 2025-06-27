@@ -2,6 +2,7 @@
 #include <iostream>
 #include <chrono>
 #include <cstring>
+#include <cmath>
 
 audio_recorder::audio_recorder() {
     // Initialize PortAudio
@@ -160,12 +161,45 @@ int audio_recorder::pa_callback(const void* input, void* output,
 
     const int16_t* inputBuffer = static_cast<const int16_t*>(input);
     const size_t numSamples = frameCount * CHANNELS;
+    static int silence_counter = 0;
+    static int callback_counter = 0;
+    callback_counter++;
+
+    double sum = 0.0;
+    for (size_t i = 0; i < numSamples; ++i) {
+        double sample = inputBuffer[i] / 32768.0; // Normalize to [-1, 1]
+        sum += sample * sample;
+    }
+    double rms = std::sqrt(sum / numSamples);
+    double db = 20 * std::log10(std::max(rms, 1e-10)); // Convert to dB
+
+    if (callback_counter % 100 == 0) {
+        if (db < -50) {
+            silence_counter++;
+            std::cout << "[AUDIO] Possible silence detected. RMS: " << rms
+                      << " dB: " << db << " (callbacks with low audio: "
+                      << silence_counter << ")" << std::endl;
+        } else {
+            std::cout << "[AUDIO] Audio level - RMS: " << rms
+                      << " dB: " << db << std::endl;
+        }
+    }
 
     // Add samples to buffer
     {
         std::lock_guard<std::mutex> lock(recorder->m_buffer_mutex);
         for (size_t i = 0; i < numSamples; ++i) {
             recorder->m_buffer.push_back(inputBuffer[i]);
+        }
+    }
+
+    if (recorder->m_dump_enabled) {
+        std::lock_guard<std::mutex> lock(recorder->m_dump_mutex);
+        if (recorder->m_audio_dump_file.is_open()) {
+            recorder->m_audio_dump_file.write(
+                reinterpret_cast<const char*>(inputBuffer),
+                numSamples * sizeof(int16_t)
+                );
         }
     }
 
@@ -226,6 +260,27 @@ std::vector<std::string> audio_recorder::list_devices() {
     }
 
     return result;
+}
+
+void audio_recorder::enable_audio_dump(const std::string& filename) {
+    std::lock_guard<std::mutex> lock(m_dump_mutex);
+    if (m_audio_dump_file.is_open()) {
+        m_audio_dump_file.close();
+    }
+    m_audio_dump_file.open(filename, std::ios::binary);
+    m_dump_enabled = m_audio_dump_file.is_open();
+    if (m_dump_enabled) {
+        std::cout << "Audio dump enabled to file: " << filename << std::endl;
+    }
+}
+
+void audio_recorder::disable_audio_dump() {
+    std::lock_guard<std::mutex> lock(m_dump_mutex);
+    m_dump_enabled = false;
+    if (m_audio_dump_file.is_open()) {
+        m_audio_dump_file.close();
+        std::cout << "Audio dump disabled" << std::endl;
+    }
 }
 
 int audio_recorder::find_device_by_name(const std::string& name) {

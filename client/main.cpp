@@ -279,7 +279,15 @@ int main(int argc, char* argv[]) {
             } else {
                 std::cout << "Usage: verbose <on|off>" << std::endl;
             }
-        } else {
+        } else if (command == "test audio") {
+            recorder.enable_audio_dump("test_audio.raw");
+            std::cout << "Recording 5 seconds of audio to test_audio.raw..." << std::endl;
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            recorder.disable_audio_dump();
+            std::cout << "Test complete. You can play the file with:" << std::endl;
+            std::cout << "  ffplay -f s16le -ar 16000 -ac 1 test_audio.raw" << std::endl;
+        }
+        else {
             std::cout << "Unknown command: " << command << std::endl;
             std::cout << "Type 'help' for available commands" << std::endl;
         }
