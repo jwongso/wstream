@@ -22,23 +22,6 @@ void signal_handler(int signal) {
 
 #ifdef __APPLE__
 bool check_audio_permission() {
-    // Request audio permission (shows dialog if needed)
-    CFStringRef keys[] = { CFSTR("kTCCServiceMicrophone") };
-    CFTypeRef values[] = { kCFBooleanTrue };
-
-    CFDictionaryRef dict = CFDictionaryCreate(
-        kCFAllocatorDefault,
-        (const void **)keys,
-        (const void **)values,
-        1,
-        &kCFTypeDictionaryKeyCallBacks,
-        &kCFTypeDictionaryValueCallBacks
-        );
-
-    CFPreferencesSetMultiple(dict, NULL, CFSTR("com.apple.security.authorization"), kCFPreferencesCurrentUser, kCFPreferencesCurrentHost);
-    CFRelease(dict);
-
-    // No way to check result directly, so we'll return true and let PortAudio handle errors
     return true;
 }
 #endif
@@ -141,7 +124,7 @@ int main(int argc, char* argv[]) {
 
     // Create WebSocket client
     websocket_client client;
-    client.set_verbose();
+    client.set_verbose(verbose);
     client.set_use_base64(use_base64);
 
     // Set up transcription callback
@@ -284,11 +267,11 @@ int main(int argc, char* argv[]) {
 
                 if (state == "on" || state == "true" || state == "1") {
                     verbose = true;
-                    client.set_verbose();
+                    client.set_verbose(true);
                     std::cout << "Verbose mode enabled" << std::endl;
                 } else if (state == "off" || state == "false" || state == "0") {
                     verbose = false;
-                    client.set_verbose();
+                    client.set_verbose(false);
                     std::cout << "Verbose mode disabled" << std::endl;
                 } else {
                     std::cout << "Usage: verbose <on|off>" << std::endl;

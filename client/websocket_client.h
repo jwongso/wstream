@@ -107,7 +107,7 @@ public:
      * @brief Toggle verbose mode for debugging
      * @param verbose Whether to enable verbose output
      */
-    void set_verbose() { m_verbose = !m_verbose; }
+    void set_verbose(bool verbose) { m_verbose = verbose; }
 
     /**
      * @brief Sets whether to use Base64 encoding for audio data
@@ -138,6 +138,9 @@ private:
 
     /// Callback mutex
     std::mutex m_callback_mutex;
+
+    /// Write mutex
+    std::mutex m_write_mutex;
 
     /// Verbose mode flag
     bool m_verbose = false;

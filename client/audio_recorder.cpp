@@ -189,7 +189,13 @@ void audio_recorder::process_audio_thread() {
 
         // Process batch if not empty
         if (!batch.empty() && m_callback) {
-            m_callback(batch);
+            try {
+                m_callback(batch);
+            } catch (const std::exception& e) {
+                std::cerr << "Error in audio callback: " << e.what() << std::endl;
+            } catch (...) {
+                std::cerr << "Unknown error in audio callback" << std::endl;
+            }
             batch.clear();
         } else {
             // Sleep a bit to avoid busy waiting

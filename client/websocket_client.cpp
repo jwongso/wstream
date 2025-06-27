@@ -118,6 +118,7 @@ bool websocket_client::send_audio_data(const std::vector<int16_t>& pcm_data,
     }
 
     try {
+        std::lock_guard<std::mutex> lock(m_write_mutex);
         json audio_message;
         audio_message["type"] = "audio";
         audio_message["sample_rate"] = 16000;

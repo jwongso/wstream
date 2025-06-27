@@ -84,7 +84,6 @@ if(PortAudio_FOUND)
     set(PORTAUDIO_LIBRARIES ${PortAudio_LIBRARIES})
     set(PORTAUDIO_FOUND TRUE)
 elseif(PORTAUDIO_FOUND)
-    set(PORTAUDIO_LIBRARIES "${PORTAUDIO_LIBRARY_DIRS}/lib${PORTAUDIO_LIBRARIES}.dylib")
     message(STATUS "PortAudio found via pkg-config or manual search")
 else()
     message(FATAL_ERROR "PortAudio not found. Please install PortAudio development files:
