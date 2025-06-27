@@ -2,6 +2,7 @@
 #include "text_processor.h"
 #include <string>
 #include <vector>
+#include <thread>
 
 /**
  * @file test_text_processor.cpp
