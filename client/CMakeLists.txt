@@ -79,12 +79,13 @@ endif()
 
 # Check if PortAudio was found by any method
 if(PortAudio_FOUND)
+    set(PORTAUDIO_LIBRARIES "${PORTAUDIO_LIBRARY_DIRS}/lib${PORTAUDIO_LIBRARIES}.dylib")
     message(STATUS "PortAudio found via find_package: ${PortAudio_LIBRARIES}")
     set(PORTAUDIO_INCLUDE_DIR ${PortAudio_INCLUDE_DIRS})
     set(PORTAUDIO_LIBRARIES ${PortAudio_LIBRARIES})
     set(PORTAUDIO_FOUND TRUE)
 elseif(PORTAUDIO_FOUND)
-    message(STATUS "PortAudio found via pkg-config or manual search")
+    message(STATUS "PortAudio found via pkg-config or manual search ${PORTAUDIO_LIBRARIES}")
 else()
     message(FATAL_ERROR "PortAudio not found. Please install PortAudio development files:
     - macOS: brew install portaudio
@@ -131,7 +132,6 @@ set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "wstream_client")
 # Print summary
 message(STATUS "Build configuration:")
 message(STATUS "  Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
-message(STATUS "  WebSocketPP: ${WEBSOCKETPP_INCLUDE_DIR}")
 message(STATUS "  PortAudio: ${PORTAUDIO_LIBRARIES}")
 message(STATUS "  Boost: ${Boost_LIBRARIES}")
 message(STATUS "  nlohmann_json: ${nlohmann_json_DIR}")
