@@ -1,112 +1,60 @@
 #include "audio_recorder.h"
 #include <iostream>
+#include <chrono>
 #include <cstring>
 
-audio_recorder::audio_recorder() = default;
+audio_recorder::audio_recorder() {
+    // Initialize PortAudio
+    PaError err = Pa_Initialize();
+    if (err != paNoError) {
+        std::cerr << "PortAudio initialization failed: " << Pa_GetErrorText(err) << std::endl;
+    }
+}
 
 audio_recorder::~audio_recorder() {
     stop_recording();
 
-    if (m_pcm_handle) {
-        snd_pcm_close(m_pcm_handle);
-        m_pcm_handle = nullptr;
+    // Terminate PortAudio
+    PaError err = Pa_Terminate();
+    if (err != paNoError) {
+        std::cerr << "PortAudio termination failed: " << Pa_GetErrorText(err) << std::endl;
     }
 }
 
 bool audio_recorder::initialize(const std::string& device_name) {
-    // Open PCM device for recording
-    int err = snd_pcm_open(&m_pcm_handle, device_name.c_str(), SND_PCM_STREAM_CAPTURE, 0);
-    if (err < 0) {
-        std::cerr << "Cannot open audio device " << device_name << ": " << snd_strerror(err) << std::endl;
-        return false;
+    if (!device_name.empty()) {
+        m_device_index = find_device_by_name(device_name);
+        if (m_device_index == -1) {
+            std::cerr << "Audio device not found: " << device_name << std::endl;
+            std::cerr << "Available devices:" << std::endl;
+            auto devices = list_devices();
+            for (const auto& device : devices) {
+                std::cerr << "  - " << device << std::endl;
+            }
+            return false;
+        }
+    } else {
+        // Use default input device
+        m_device_index = Pa_GetDefaultInputDevice();
+        if (m_device_index == paNoDevice) {
+            std::cerr << "No default input device found" << std::endl;
+            return false;
+        }
     }
 
-    if (!setup_alsa_params()) {
-        snd_pcm_close(m_pcm_handle);
-        m_pcm_handle = nullptr;
+    // Get device info
+    const PaDeviceInfo* deviceInfo = Pa_GetDeviceInfo(m_device_index);
+    if (!deviceInfo) {
+        std::cerr << "Failed to get device info" << std::endl;
         return false;
     }
 
     std::cout << "Audio recorder initialized successfully" << std::endl;
-    std::cout << "Sample rate: " << SAMPLE_RATE << " Hz" << std::endl;
+    std::cout << "Device: " << deviceInfo->name << std::endl;
+    std::cout << "Max input channels: " << deviceInfo->maxInputChannels << std::endl;
+    std::cout << "Default sample rate: " << deviceInfo->defaultSampleRate << " Hz" << std::endl;
+    std::cout << "Using sample rate: " << SAMPLE_RATE << " Hz" << std::endl;
     std::cout << "Channels: " << CHANNELS << std::endl;
-    std::cout << "Buffer size: " << BUFFER_SIZE << " frames" << std::endl;
-
-    return true;
-}
-
-bool audio_recorder::setup_alsa_params() {
-    snd_pcm_hw_params_t* hw_params;
-    int err;
-
-    // Allocate hardware parameters object
-    if ((err = snd_pcm_hw_params_malloc(&hw_params)) < 0) {
-        std::cerr << "Cannot allocate hardware parameter structure: " << snd_strerror(err) << std::endl;
-        return false;
-    }
-
-    // Initialize hardware parameters
-    if ((err = snd_pcm_hw_params_any(m_pcm_handle, hw_params)) < 0) {
-        std::cerr << "Cannot initialize hardware parameter structure: " << snd_strerror(err) << std::endl;
-        snd_pcm_hw_params_free(hw_params);
-        return false;
-    }
-
-    // Set access type
-    if ((err = snd_pcm_hw_params_set_access(m_pcm_handle, hw_params, SND_PCM_ACCESS_RW_INTERLEAVED)) < 0) {
-        std::cerr << "Cannot set access type: " << snd_strerror(err) << std::endl;
-        snd_pcm_hw_params_free(hw_params);
-        return false;
-    }
-
-    // Set sample format
-    if ((err = snd_pcm_hw_params_set_format(m_pcm_handle, hw_params, SAMPLE_FORMAT)) < 0) {
-        std::cerr << "Cannot set sample format: " << snd_strerror(err) << std::endl;
-        snd_pcm_hw_params_free(hw_params);
-        return false;
-    }
-
-    // Set sample rate
-    unsigned int rate = SAMPLE_RATE;
-    if ((err = snd_pcm_hw_params_set_rate_near(m_pcm_handle, hw_params, &rate, 0)) < 0) {
-        std::cerr << "Cannot set sample rate: " << snd_strerror(err) << std::endl;
-        snd_pcm_hw_params_free(hw_params);
-        return false;
-    }
-
-    if (rate != SAMPLE_RATE) {
-        std::cerr << "Warning: Requested rate " << SAMPLE_RATE << " Hz, got " << rate << " Hz" << std::endl;
-    }
-
-    // Set number of channels
-    if ((err = snd_pcm_hw_params_set_channels(m_pcm_handle, hw_params, CHANNELS)) < 0) {
-        std::cerr << "Cannot set channel count: " << snd_strerror(err) << std::endl;
-        snd_pcm_hw_params_free(hw_params);
-        return false;
-    }
-
-    // Set buffer size
-    snd_pcm_uframes_t buffer_size = BUFFER_SIZE;
-    if ((err = snd_pcm_hw_params_set_buffer_size_near(m_pcm_handle, hw_params, &buffer_size)) < 0) {
-        std::cerr << "Cannot set buffer size: " << snd_strerror(err) << std::endl;
-        snd_pcm_hw_params_free(hw_params);
-        return false;
-    }
-
-    // Apply hardware parameters
-    if ((err = snd_pcm_hw_params(m_pcm_handle, hw_params)) < 0) {
-        std::cerr << "Cannot set hardware parameters: " << snd_strerror(err) << std::endl;
-        snd_pcm_hw_params_free(hw_params);
-        return false;
-    }
-
-    snd_pcm_hw_params_free(hw_params);
-
-    // Prepare the PCM for use
-    if ((err = snd_pcm_prepare(m_pcm_handle)) < 0) {
-        std::cerr << "Cannot prepare audio interface for use: " << snd_strerror(err) << std::endl;
-        return false;
-    }
 
     return true;
 }
@@ -117,15 +65,50 @@ bool audio_recorder::start_recording(audio_callback_t callback) {
         return false;
     }
 
-    if (!m_pcm_handle) {
-        std::cerr << "Audio recorder not initialized" << std::endl;
+    m_callback = callback;
+
+    // Clear buffer
+    {
+        std::lock_guard<std::mutex> lock(m_buffer_mutex);
+        m_buffer.clear();
+    }
+
+    // Open stream
+    PaStreamParameters inputParams;
+    memset(&inputParams, 0, sizeof(inputParams));
+    inputParams.device = m_device_index;
+    inputParams.channelCount = CHANNELS;
+    inputParams.sampleFormat = paInt16;
+    inputParams.suggestedLatency = Pa_GetDeviceInfo(m_device_index)->defaultLowInputLatency;
+    inputParams.hostApiSpecificStreamInfo = nullptr;
+
+    PaError err = Pa_OpenStream(&m_stream,
+                                &inputParams,
+                                nullptr, // No output
+                                SAMPLE_RATE,
+                                FRAMES_PER_BUFFER,
+                                paClipOff,
+                                pa_callback,
+                                this);
+
+    if (err != paNoError) {
+        std::cerr << "Failed to open audio stream: " << Pa_GetErrorText(err) << std::endl;
         return false;
     }
 
-    m_callback = callback;
+    // Start stream
+    err = Pa_StartStream(m_stream);
+    if (err != paNoError) {
+        std::cerr << "Failed to start audio stream: " << Pa_GetErrorText(err) << std::endl;
+        Pa_CloseStream(m_stream);
+        m_stream = nullptr;
+        return false;
+    }
+
     m_recording = true;
 
-    m_record_thread = std::make_unique<std::thread>(&audio_recorder::record_thread_func, this);
+    // Start processing thread
+    m_thread = std::make_unique<std::thread>(&audio_recorder::process_audio_thread, this);
 
     std::cout << "Started recording..." << std::endl;
     return true;
@@ -138,48 +121,123 @@ void audio_recorder::stop_recording() {
 
     m_recording = false;
 
-    if (m_record_thread && m_record_thread->joinable()) {
-        m_record_thread->join();
+    if (m_stream) {
+        PaError err = Pa_StopStream(m_stream);
+        if (err != paNoError) {
+            std::cerr << "Failed to stop audio stream: " << Pa_GetErrorText(err) << std::endl;
+        }
+
+        err = Pa_CloseStream(m_stream);
+        if (err != paNoError) {
+            std::cerr << "Failed to close audio stream: " << Pa_GetErrorText(err) << std::endl;
+        }
+
+        m_stream = nullptr;
     }
 
-    m_record_thread.reset();
+    if (m_thread && m_thread->joinable()) {
+        m_thread->join();
+    }
+
+    m_thread.reset();
 
     std::cout << "Stopped recording" << std::endl;
 }
 
-void audio_recorder::record_thread_func() {
-    std::vector<int16_t> buffer(BUFFER_SIZE);
+int audio_recorder::pa_callback(const void* input, void* output,
+                                unsigned long frameCount,
+                                const PaStreamCallbackTimeInfo* timeInfo,
+                                PaStreamCallbackFlags statusFlags,
+                                void* userData) {
+    (void)output; // Unused
+    (void)timeInfo;
+    (void)statusFlags;
+
+    audio_recorder* recorder = static_cast<audio_recorder*>(userData);
+    if (!recorder->m_recording) {
+        return paAbort;
+    }
+
+    const int16_t* inputBuffer = static_cast<const int16_t*>(input);
+    const size_t numSamples = frameCount * CHANNELS;
+
+    // Add samples to buffer
+    {
+        std::lock_guard<std::mutex> lock(recorder->m_buffer_mutex);
+        for (size_t i = 0; i < numSamples; ++i) {
+            recorder->m_buffer.push_back(inputBuffer[i]);
+        }
+    }
+
+    return paContinue;
+}
+
+void audio_recorder::process_audio_thread() {
+    const size_t BATCH_SIZE = FRAMES_PER_BUFFER * CHANNELS;
+    std::vector<int16_t> batch;
+    batch.reserve(BATCH_SIZE);
 
     while (m_recording) {
-        snd_pcm_sframes_t frames = snd_pcm_readi(m_pcm_handle, buffer.data(), BUFFER_SIZE);
-
-        if (frames < 0) {
-            if (frames == -EPIPE) {
-                // Buffer overrun
-                std::cerr << "Buffer overrun occurred" << std::endl;
-                snd_pcm_prepare(m_pcm_handle);
-                continue;
-            } else if (frames == -ESTRPIPE) {
-                // Suspend, try to recover
-                std::cerr << "Stream suspended, trying to recover" << std::endl;
-                while ((frames = snd_pcm_resume(m_pcm_handle)) == -EAGAIN) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                }
-                if (frames < 0) {
-                    frames = snd_pcm_prepare(m_pcm_handle);
-                }
-                continue;
-            } else {
-                std::cerr << "Read error: " << snd_strerror(frames) << std::endl;
-                break;
+        // Get samples from buffer
+        {
+            std::lock_guard<std::mutex> lock(m_buffer_mutex);
+            while (!m_buffer.empty() && batch.size() < BATCH_SIZE) {
+                batch.push_back(m_buffer.front());
+                m_buffer.pop_front();
             }
         }
 
-        if (frames > 0 && m_callback) {
-            // Resize buffer to actual frames read
-            buffer.resize(frames);
-            m_callback(buffer);
-            buffer.resize(BUFFER_SIZE);  // Restore buffer size
+        // Process batch if not empty
+        if (!batch.empty() && m_callback) {
+            m_callback(batch);
+            batch.clear();
+        } else {
+            // Sleep a bit to avoid busy waiting
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
     }
+}
+
+std::vector<std::string> audio_recorder::list_devices() {
+    std::vector<std::string> result;
+
+    int numDevices = Pa_GetDeviceCount();
+    if (numDevices < 0) {
+        std::cerr << "PortAudio error: " << Pa_GetErrorText(numDevices) << std::endl;
+        return result;
+    }
+
+    for (int i = 0; i < numDevices; ++i) {
+        const PaDeviceInfo* deviceInfo = Pa_GetDeviceInfo(i);
+        if (deviceInfo && deviceInfo->maxInputChannels > 0) {
+            std::string name = deviceInfo->name;
+            const PaHostApiInfo* hostInfo = Pa_GetHostApiInfo(deviceInfo->hostApi);
+            if (hostInfo) {
+                name += " (" + std::string(hostInfo->name) + ")";
+            }
+            result.push_back(name);
+        }
+    }
+
+    return result;
+}
+
+int audio_recorder::find_device_by_name(const std::string& name) {
+    int numDevices = Pa_GetDeviceCount();
+    if (numDevices < 0) {
+        std::cerr << "PortAudio error: " << Pa_GetErrorText(numDevices) << std::endl;
+        return -1;
+    }
+
+    for (int i = 0; i < numDevices; ++i) {
+        const PaDeviceInfo* deviceInfo = Pa_GetDeviceInfo(i);
+        if (deviceInfo && deviceInfo->maxInputChannels > 0) {
+            std::string deviceName = deviceInfo->name;
+            if (deviceName.find(name) != std::string::npos) {
+                return i;
+            }
+        }
+    }
+
+    return -1;
 }

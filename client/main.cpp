@@ -1,11 +1,17 @@
 #include "audio_recorder.h"
 #include "websocket_client.h"
+#include "base64.h"
 #include <iostream>
 #include <signal.h>
 #include <atomic>
 #include <chrono>
 #include <thread>
 #include <string>
+#include <algorithm>
+
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#endif
 
 std::atomic<bool> g_running{true};
 
@@ -14,16 +20,55 @@ void signal_handler(int signal) {
     g_running = false;
 }
 
+#ifdef __APPLE__
+bool check_audio_permission() {
+    // Request audio permission (shows dialog if needed)
+    CFStringRef keys[] = { CFSTR("kTCCServiceMicrophone") };
+    CFTypeRef values[] = { kCFBooleanTrue };
+
+    CFDictionaryRef dict = CFDictionaryCreate(
+        kCFAllocatorDefault,
+        (const void **)keys,
+        (const void **)values,
+        1,
+        &kCFTypeDictionaryKeyCallBacks,
+        &kCFTypeDictionaryValueCallBacks
+        );
+
+    CFPreferencesSetMultiple(dict, NULL, CFSTR("com.apple.security.authorization"), kCFPreferencesCurrentUser, kCFPreferencesCurrentHost);
+    CFRelease(dict);
+
+    // No way to check result directly, so we'll return true and let PortAudio handle errors
+    return true;
+}
+#endif
+
 void show_help() {
     std::cout << "\nAvailable commands:" << std::endl;
-    std::cout << "  start    - Start audio recording" << std::endl;
-    std::cout << "  stop     - Stop audio recording" << std::endl;
-    std::cout << "  status   - Get server status" << std::endl;
-    std::cout << "  source <type> - Set audio source (websocket/microphone)" << std::endl;
-    std::cout << "  verbose  - Toggle verbose mode" << std::endl;
-    std::cout << "  help     - Show this help" << std::endl;
-    std::cout << "  quit     - Quit application" << std::endl;
+    std::cout << "  start            - Start audio recording" << std::endl;
+    std::cout << "  stop             - Stop audio recording" << std::endl;
+    std::cout << "  status           - Get server status" << std::endl;
+    std::cout << "  source <type>    - Set audio source (websocket/microphone)" << std::endl;
+    std::cout << "  devices          - List available audio devices" << std::endl;
+    std::cout << "  device <name>    - Select audio device by name" << std::endl;
+    std::cout << "  verbose <on|off> - Toggle verbose mode" << std::endl;
+    std::cout << "  help             - Show this help" << std::endl;
+    std::cout << "  quit             - Quit application" << std::endl;
     std::cout << std::endl;
+}
+
+void print_usage(const char* program_name) {
+    std::cout << "Usage: " << program_name << " [options] [server_uri] [audio_device]\n\n";
+    std::cout << "Options:\n";
+    std::cout << "  -v, --verbose      Enable verbose debug output\n";
+    std::cout << "  -r, --raw          Use raw PCM data instead of Base64 encoding\n";
+    std::cout << "  -l, --list-devices List available audio devices\n";
+    std::cout << "  -h, --help         Show this help message\n\n";
+    std::cout << "Arguments:\n";
+    std::cout << "  server_uri         WebSocket server URI (default: ws://localhost:8080)\n";
+    std::cout << "  audio_device       Audio device name (default: system default)\n\n";
+    std::cout << "Example:\n";
+    std::cout << "  " << program_name << " --verbose ws://localhost:8080 \"Built-in Microphone\"\n";
 }
 
 int main(int argc, char* argv[]) {
@@ -33,18 +78,57 @@ int main(int argc, char* argv[]) {
 
     // Parse command line arguments
     std::string server_uri = "ws://localhost:8080";
-    std::string audio_device = "default";
+    std::string audio_device = "";  // Empty for default
+    bool verbose = false;
+    bool use_base64 = true;
+    bool list_devices = false;
 
-    if (argc > 1) {
-        server_uri = argv[1];
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "-v" || arg == "--verbose") {
+            verbose = true;
+        } else if (arg == "-r" || arg == "--raw") {
+            use_base64 = false;
+        } else if (arg == "-l" || arg == "--list-devices") {
+            list_devices = true;
+        } else if (arg == "-h" || arg == "--help") {
+            print_usage(argv[0]);
+            return 0;
+        } else if (arg[0] == '-') {
+            std::cerr << "Unknown option: " << arg << std::endl;
+            print_usage(argv[0]);
+            return 1;
+        } else if (server_uri == "ws://localhost:8080") {
+            server_uri = arg;
+        } else if (audio_device.empty()) {
+            audio_device = arg;
+        } else {
+            std::cerr << "Too many arguments" << std::endl;
+            print_usage(argv[0]);
+            return 1;
+        }
     }
-    if (argc > 2) {
-        audio_device = argv[2];
+
+    // Just list devices if requested
+    if (list_devices) {
+        audio_recorder recorder;
+        std::cout << "Available audio devices:" << std::endl;
+        auto devices = recorder.list_devices();
+        for (size_t i = 0; i < devices.size(); ++i) {
+            std::cout << "  " << i << ": " << devices[i] << std::endl;
+        }
+        return 0;
     }
+
+#ifdef __APPLE__
+    check_audio_permission();
+#endif
 
     std::cout << "WStream Interactive Client" << std::endl;
     std::cout << "Server: " << server_uri << std::endl;
-    std::cout << "Audio device: " << audio_device << std::endl;
+    std::cout << "Audio device: " << (audio_device.empty() ? "default" : audio_device) << std::endl;
+    std::cout << "Verbose mode: " << (verbose ? "enabled" : "disabled") << std::endl;
+    std::cout << "Encoding: " << (use_base64 ? "Base64" : "Raw") << std::endl;
     std::cout << "Type 'help' for available commands" << std::endl;
     std::cout << "----------------------------------------" << std::endl;
 
@@ -57,6 +141,8 @@ int main(int argc, char* argv[]) {
 
     // Create WebSocket client
     websocket_client client;
+    client.set_verbose();
+    client.set_use_base64(use_base64);
 
     // Set up transcription callback
     client.set_transcription_callback([](const std::string& text) {
@@ -73,8 +159,8 @@ int main(int argc, char* argv[]) {
     // Set up response callback
     client.set_response_callback([](const json& response) {
         if (response.contains("action") && response.contains("status")) {
-            std::string action = response["action"];
-            std::string status = response["status"];
+            std::string action = response["action"].get<std::string>();
+            std::string status = response["status"].get<std::string>();
 
             std::cout << "[RESPONSE] " << action << " -> " << status;
 
@@ -82,8 +168,8 @@ int main(int argc, char* argv[]) {
                 std::cout << ": " << response["message"].get<std::string>();
             }
 
-            if (response.contains("audio_source")) {
-                std::cout << " (current: " << response["audio_source"].get<std::string>() << ")";
+            if (response.contains("current_source")) {
+                std::cout << " (current: " << response["current_source"].get<std::string>() << ")";
             }
 
             std::cout << std::endl;
@@ -99,8 +185,18 @@ int main(int argc, char* argv[]) {
     }
 
     // Set up audio callback
-    auto audio_callback = [&client](const std::vector<int16_t>& pcm_data) {
-        client.send_audio_data(pcm_data);
+    auto audio_callback = [&client, &verbose](const std::vector<int16_t>& pcm_data) {
+        static int packet_count = 0;
+        packet_count++;
+
+        if (!client.send_audio_data(pcm_data)) {
+            std::cerr << "Failed to send audio data" << std::endl;
+        } else if (verbose) {
+            if (packet_count % 10 == 0) {  // Less frequent in verbose mode
+                std::cout << "[AUDIO] Sent packet #" << packet_count << " (" << pcm_data.size() << " samples)" << std::endl;
+                std::cout << "> " << std::flush;  // Show prompt again
+            }
+        }
     };
 
     // Automatically set audio source to websocket
@@ -147,8 +243,59 @@ int main(int argc, char* argv[]) {
             } else {
                 std::cout << "Usage: source <websocket|microphone>" << std::endl;
             }
-        } else if (command == "verbose") {
-            client.set_verbose();
+        } else if (command == "devices") {
+            auto devices = recorder.list_devices();
+            std::cout << "Available audio devices:" << std::endl;
+            for (size_t i = 0; i < devices.size(); ++i) {
+                std::cout << "  " << i << ": " << devices[i] << std::endl;
+            }
+        } else if (command.substr(0, 6) == "device") {
+            if (command.length() > 7) {
+                std::string device_name = command.substr(7);
+
+                // Stop recording if active
+                bool was_recording = recorder.is_recording();
+                if (was_recording) {
+                    recorder.stop_recording();
+                }
+
+                // Try to initialize with new device
+                if (recorder.initialize(device_name)) {
+                    std::cout << "Switched to audio device: " << device_name << std::endl;
+
+                    // Restart recording if it was active
+                    if (was_recording) {
+                        if (recorder.start_recording(audio_callback)) {
+                            std::cout << "Recording restarted" << std::endl;
+                        } else {
+                            std::cout << "Failed to restart recording" << std::endl;
+                        }
+                    }
+                } else {
+                    std::cout << "Failed to switch audio device" << std::endl;
+                }
+            } else {
+                std::cout << "Usage: device <name>" << std::endl;
+            }
+        } else if (command.substr(0, 7) == "verbose") {
+            if (command.length() > 8) {
+                std::string state = command.substr(8);
+                std::transform(state.begin(), state.end(), state.begin(), ::tolower);
+
+                if (state == "on" || state == "true" || state == "1") {
+                    verbose = true;
+                    client.set_verbose();
+                    std::cout << "Verbose mode enabled" << std::endl;
+                } else if (state == "off" || state == "false" || state == "0") {
+                    verbose = false;
+                    client.set_verbose();
+                    std::cout << "Verbose mode disabled" << std::endl;
+                } else {
+                    std::cout << "Usage: verbose <on|off>" << std::endl;
+                }
+            } else {
+                std::cout << "Usage: verbose <on|off>" << std::endl;
+            }
         } else {
             std::cout << "Unknown command: " << command << std::endl;
             std::cout << "Type 'help' for available commands" << std::endl;
