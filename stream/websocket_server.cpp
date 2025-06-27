@@ -11,6 +11,7 @@
 
 #include "websocket_server.h"
 #include "wstream_app.h"
+#include "base64.h"
 #include <iostream>
 #include <algorithm>
 
@@ -513,21 +514,50 @@ audio_data websocket_server::parse_audio_data(const nlohmann::json& json_message
     audio_data result;
 
     // Parse required audio samples
-    if (!json_message.contains("audio") || !json_message["audio"].is_array()) {
-        throw std::invalid_argument("Missing or invalid 'audio' field");
+    if (!json_message.contains("audio")) {
+        throw std::invalid_argument("Missing 'audio' field");
     }
 
-    const auto& audio_array = json_message["audio"];
-    if (audio_array.size() > MAX_AUDIO_SAMPLES) {
-        throw std::invalid_argument("Audio data exceeds maximum allowed size");
+    // Check if audio is Base64 encoded
+    bool is_base64 = false;
+    if (json_message.contains("encoding") && json_message["encoding"].is_string()) {
+        is_base64 = json_message["encoding"].get<std::string>() == "base64";
     }
 
-    result.samples.reserve(audio_array.size());
-    for (const auto& sample : audio_array) {
-        if (!sample.is_number()) {
-            throw std::invalid_argument("Audio sample is not a number");
+    if (is_base64) {
+        if (!json_message["audio"].is_string()) {
+            throw std::invalid_argument("Base64 audio data must be a string");
         }
-        result.samples.push_back(sample.get<int16_t>());
+
+        std::string base64_data = json_message["audio"].get<std::string>();
+
+        try {
+            // Use optimized fast decode for audio data
+            if (!base64::decode_audio_fast(base64_data, result.samples)) {
+                throw std::invalid_argument("Failed to decode Base64 audio data");
+            }
+
+        } catch (const std::exception& e) {
+            throw std::invalid_argument(std::string("Base64 decoding error: ") + e.what());
+        }
+    } else {
+        // Parse raw audio data
+        if (!json_message["audio"].is_array()) {
+            throw std::invalid_argument("Raw audio data must be an array");
+        }
+
+        const auto& audio_array = json_message["audio"];
+        if (audio_array.size() > MAX_AUDIO_SAMPLES) {
+            throw std::invalid_argument("Audio data exceeds maximum allowed size");
+        }
+
+        result.samples.reserve(audio_array.size());
+        for (const auto& sample : audio_array) {
+            if (!sample.is_number()) {
+                throw std::invalid_argument("Audio sample is not a number");
+            }
+            result.samples.push_back(sample.get<int16_t>());
+        }
     }
 
     // Parse optional fields

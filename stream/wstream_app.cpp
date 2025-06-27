@@ -184,15 +184,44 @@ bool wstream_app::setup_websocket_server() {
             response["type"] = "response";
             response["action"] = command;
 
-            if (command == "get_status") {
+            if (command == "set_audio_source") {
+                // Handle set_audio_source command
+                if (!params.contains("source") || !params["source"].is_string()) {
+                    response["status"] = "error";
+                    response["message"] = "Missing or invalid 'source' parameter";
+                } else {
+                    std::string source_str = params["source"].get<std::string>();
+                    audio_source_type new_source_type = audio_source_factory::parse_type(source_str);
+
+                    if (!audio_source_factory::is_type_supported(new_source_type)) {
+                        response["status"] = "error";
+                        response["message"] = "Unsupported audio source type: " + source_str;
+                    } else {
+                        bool success = set_audio_source_runtime(new_source_type);
+                        response["status"] = success ? "success" : "error";
+                        response["source"] = source_str;
+                        response["audio_source"] = audio_source_factory::type_to_string(m_audio_source_type);
+                        response["audio_source_name"] = get_audio_source_name();
+
+                        if (success) {
+                            response["message"] = "Audio source switched to " + source_str;
+                        } else {
+                            response["message"] = "Failed to switch audio source to " + source_str;
+                        }
+                    }
+                }
+
+            } else if (command == "get_status") {
                 response["status"] = "success";
                 response["audio_source"] = audio_source_factory::type_to_string(m_audio_source_type);
                 response["audio_source_name"] = get_audio_source_name();
                 response["is_running"] = is_running();
                 response["client_count"] = m_websocket_server->get_client_count();
+
             } else if (command == "get_transcription") {
                 response["status"] = "success";
                 response["transcription"] = get_latest_transcription();
+
             } else {
                 response["status"] = "error";
                 response["message"] = "Unknown command: " + command;
@@ -200,7 +229,7 @@ bool wstream_app::setup_websocket_server() {
 
             return response;
         }
-        );
+    );
 
     m_websocket_server->start();
     return true;
@@ -277,6 +306,79 @@ void wstream_app::process_audio_loop() {
 
 std::string wstream_app::get_audio_source_name() const {
     return audio_source_factory::get_type_name(m_audio_source_type);
+}
+
+bool wstream_app::set_audio_source_runtime(audio_source_type source_type) {
+    if (source_type == m_audio_source_type) {
+        // Already using this source type
+        return true;
+    }
+
+    std::cout << "Switching audio source from " << get_audio_source_name()
+              << " to " << audio_source_factory::get_type_name(source_type) << std::endl;
+
+    return switch_audio_source(source_type);
+}
+
+bool wstream_app::switch_audio_source(audio_source_type new_source_type) {
+    // Stop current audio source
+    if (m_audio_source) {
+        m_audio_source->stop();
+    }
+
+    // Create new audio source
+    auto new_audio_source = create_audio_source(new_source_type);
+    if (!new_audio_source) {
+        std::cerr << "Failed to create new audio source: "
+                  << audio_source_factory::get_type_name(new_source_type) << std::endl;
+
+        // Try to restart the old source
+        if (m_audio_source) {
+            m_audio_source->start();
+        }
+        return false;
+    }
+
+    // Start new audio source
+    if (!new_audio_source->start()) {
+        std::cerr << "Failed to start new audio source: "
+                  << audio_source_factory::get_type_name(new_source_type) << std::endl;
+
+        // Try to restart the old source
+        if (m_audio_source) {
+            m_audio_source->start();
+        }
+        return false;
+    }
+
+    // Switch to new source
+    m_audio_source = std::move(new_audio_source);
+    m_audio_source_type = new_source_type;
+
+    // Update typed references
+    m_websocket_audio_source = nullptr;
+    if (m_audio_source_type == audio_source_type::WEBSOCKET_CLIENT) {
+        m_websocket_audio_source = static_cast<websocket_audio_source*>(m_audio_source.get());
+    }
+
+    std::cout << "Successfully switched to audio source: " << get_audio_source_name() << std::endl;
+    return true;
+}
+
+std::unique_ptr<audio_source> wstream_app::create_audio_source(audio_source_type source_type) {
+    auto new_source = audio_source_factory::create(source_type);
+    if (!new_source) {
+        return nullptr;
+    }
+
+    // For WebSocket source, we need to update the WebSocket server callback
+    if (source_type == audio_source_type::WEBSOCKET_CLIENT && m_websocket_server) {
+        // The audio callback will be automatically routed to the new WebSocket source
+        // when handle_websocket_audio is called, since we update m_websocket_audio_source
+        // in switch_audio_source
+    }
+
+    return new_source;
 }
 
 void wstream_app::handle_websocket_audio(const std::vector<int16_t>& samples,

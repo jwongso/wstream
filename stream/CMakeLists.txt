@@ -43,6 +43,7 @@ set(LIB_SOURCES
     websocket_server.cpp
     websocket_audio_source.cpp
     audio_source_factory.cpp
+    base64.cpp
 )
 
 set(LIB_HEADERS
@@ -54,6 +55,7 @@ set(LIB_HEADERS
     audio_source.h
     websocket_audio_source.h
     audio_source_factory.h
+    base64.h
 )
 
 add_library(${LIB_TARGET} STATIC ${LIB_SOURCES} ${LIB_HEADERS})

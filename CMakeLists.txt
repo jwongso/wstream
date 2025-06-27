@@ -75,10 +75,10 @@ if (EMSCRIPTEN)
 
     message(STATUS "Configuring for Emscripten build")
 
-    add_subdirectory(ggml)
-    add_subdirectory(src)
-    add_subdirectory(common)
-    add_subdirectory(stream.wasm)
+    add_subdirectory(ggml/)
+    add_subdirectory(src/)
+    add_subdirectory(common/)
+    add_subdirectory(stream.wasm/)
 
 else()
 
@@ -154,9 +154,10 @@ else()
         set(BUILD_SHARED_LIBS_DEFAULT ON)
     endif()
 
-    add_subdirectory(ggml)
-    add_subdirectory(src)
-    add_subdirectory(common)
-    add_subdirectory(stream)
+    add_subdirectory(ggml/)
+    add_subdirectory(src/)
+    add_subdirectory(common/)
+    add_subdirectory(stream/)
+    add_subdirectory(client/)
 
 endif()

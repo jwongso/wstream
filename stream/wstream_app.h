@@ -139,6 +139,16 @@ public:
     std::string get_audio_source_name() const;
 
     /**
+     * @brief Sets the audio source type at runtime
+     * @param source_type New audio source type to use
+     * @return true if switch successful, false otherwise
+     *
+     * Note: This creates a new audio source and replaces the current one.
+     * Any ongoing audio processing will be interrupted.
+     */
+    bool set_audio_source_runtime(audio_source_type source_type);
+
+    /**
      * @brief Handles incoming audio data from WebSocket clients
      * @param samples PCM audio samples (16-bit)
      * @param session_id Client session identifier
@@ -242,4 +252,18 @@ private:
      * @param transcription New transcription text
      */
     void update_latest_transcription(const std::string& transcription);
+
+    /**
+     * @brief Safely switches to a new audio source
+     * @param new_source_type The new audio source type
+     * @return true if successful, false otherwise
+     */
+    bool switch_audio_source(audio_source_type new_source_type);
+
+    /**
+     * @brief Creates and initializes a new audio source
+     * @param source_type Type of audio source to create
+     * @return Unique pointer to created audio source, nullptr on failure
+     */
+    std::unique_ptr<audio_source> create_audio_source(audio_source_type source_type);
 };
