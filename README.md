@@ -280,10 +280,10 @@ Register in audio_source_factory
 MIT License
 
 ## Acknowledgments
-Whisper.cpp by Georgi Gerganov
-OpenAI Whisper for the original model
-Boost.Beast for WebSocket implementation
-PortAudio for cross-platform audio capture
+- Whisper.cpp by Georgi Gerganov
+- OpenAI Whisper for the original model
+- Boost.Beast for WebSocket implementation
+- PortAudio for cross-platform audio capture
 
 ## Contributing
 Fork and PR
