@@ -55,9 +55,7 @@ bool websocket_audio_source::get_audio_samples(std::vector<float>& samples) {
 
     // Add new packets to accumulator
     audio_packet packet;
-    int packets_added = 0;
     while (m_audio_queue.try_dequeue(packet)) {
-        packets_added++;
         m_accumulated_samples.insert(m_accumulated_samples.end(),
                                      packet.samples.begin(),
                                      packet.samples.end());
