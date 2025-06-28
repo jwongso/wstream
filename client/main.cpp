@@ -214,8 +214,24 @@ int main(int argc, char* argv[]) {
             if (!recorder.is_recording()) {
                 std::cout << "Not recording" << std::endl;
             } else {
-                recorder.stop_recording();
-                std::cout << "Stopped recording" << std::endl;
+                // Stop recording with timeout
+                std::thread stop_thread([&recorder]() {
+                    recorder.stop_recording();
+                });
+
+                // Wait up to 3 seconds
+                auto start = std::chrono::steady_clock::now();
+                while (stop_thread.joinable() &&
+                       std::chrono::steady_clock::now() - start < std::chrono::seconds(3)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+
+                if (stop_thread.joinable()) {
+                    std::cout << "Warning: Stop operation timed out" << std::endl;
+                    stop_thread.detach();
+                } else {
+                    std::cout << "Stopped recording" << std::endl;
+                }
             }
         } else if (command == "status") {
             client.get_server_status();

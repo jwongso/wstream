@@ -123,11 +123,13 @@ void audio_recorder::stop_recording() {
     m_recording = false;
 
     if (m_stream) {
+        std::cout << "Stopping audio stream..." << std::endl;
         PaError err = Pa_StopStream(m_stream);
         if (err != paNoError) {
             std::cerr << "Failed to stop audio stream: " << Pa_GetErrorText(err) << std::endl;
         }
 
+        std::cout << "Closing audio stream..." << std::endl;
         err = Pa_CloseStream(m_stream);
         if (err != paNoError) {
             std::cerr << "Failed to close audio stream: " << Pa_GetErrorText(err) << std::endl;
@@ -137,10 +139,48 @@ void audio_recorder::stop_recording() {
     }
 
     if (m_thread && m_thread->joinable()) {
-        m_thread->join();
+        std::cout << "Waiting for processing thread to finish..." << std::endl;
+
+        // Wake up the thread if it's sleeping
+        {
+            std::lock_guard<std::mutex> lock(m_buffer_mutex);
+            // Just acquiring and releasing the lock to potentially wake the thread
+        }
+
+        // Wait with a timeout to avoid infinite wait
+        auto start = std::chrono::steady_clock::now();
+        while (m_thread->joinable()) {
+            if (std::chrono::steady_clock::now() - start > std::chrono::seconds(5)) {
+                std::cerr << "Warning: Processing thread did not finish in 5 seconds" << std::endl;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        try {
+            if (m_thread->joinable()) {
+                m_thread->join();
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Error joining thread: " << e.what() << std::endl;
+        }
     }
 
     m_thread.reset();
+
+    {
+        std::lock_guard<std::mutex> lock(m_buffer_mutex);
+        m_buffer.clear();
+    }
+
+    // Close dump file if open
+    {
+        std::lock_guard<std::mutex> lock(m_dump_mutex);
+        if (m_audio_dump_file.is_open()) {
+            m_audio_dump_file.close();
+        }
+        m_dump_enabled = false;
+    }
 
     std::cout << "Stopped recording" << std::endl;
 }
@@ -163,49 +203,36 @@ int audio_recorder::pa_callback(const void* input, void* output,
     const size_t numSamples = frameCount * CHANNELS;
 
     if (recorder->m_dump_enabled) {
-        std::lock_guard<std::mutex> lock(recorder->m_dump_mutex);
-        if (recorder->m_audio_dump_file.is_open()) {
+        // Use try_lock to avoid blocking
+        std::unique_lock<std::mutex> dump_lock(recorder->m_dump_mutex, std::try_to_lock);
+        if (dump_lock.owns_lock() && recorder->m_audio_dump_file.is_open()) {
             recorder->m_audio_dump_file.write(
                 reinterpret_cast<const char*>(inputBuffer),
                 numSamples * sizeof(int16_t)
                 );
-            recorder->m_audio_dump_file.flush(); // Force write to disk
         }
     }
 
-    static int silence_counter = 0;
-    static int callback_counter = 0;
-    callback_counter++;
-
-    double sum = 0.0;
-    for (size_t i = 0; i < numSamples; ++i) {
-        double sample = inputBuffer[i] / 32768.0; // Normalize to [-1, 1]
-        sum += sample * sample;
-    }
-    double rms = std::sqrt(sum / numSamples);
-    double db = 20 * std::log10(std::max(rms, 1e-10)); // Convert to dB
-
-    if (callback_counter % 100 == 0) {
-        if (db < -50) {
-            silence_counter++;
-            std::cout << "[AUDIO] Possible silence detected. RMS: " << rms
-                      << " dB: " << db << " (callbacks with low audio: "
-                      << silence_counter << ")" << std::endl;
-        } else {
-            std::cout << "[AUDIO] Audio level - RMS: " << rms
-                      << " dB: " << db << std::endl;
-        }
-    }
-
-    // Add samples to buffer
     {
-        std::lock_guard<std::mutex> lock(recorder->m_buffer_mutex);
-        for (size_t i = 0; i < numSamples; ++i) {
-            recorder->m_buffer.push_back(inputBuffer[i]);
+        std::unique_lock<std::mutex> lock(recorder->m_buffer_mutex, std::try_to_lock);
+        if (lock.owns_lock()) {
+            // Prevent buffer from growing too large
+            const size_t MAX_BUFFER_SIZE = SAMPLE_RATE * 10; // 10 seconds
+            if (recorder->m_buffer.size() + numSamples > MAX_BUFFER_SIZE) {
+                // Drop oldest samples
+                size_t to_drop = recorder->m_buffer.size() + numSamples - MAX_BUFFER_SIZE;
+                recorder->m_buffer.erase(recorder->m_buffer.begin(),
+                                         recorder->m_buffer.begin() + to_drop);
+            }
+
+            for (size_t i = 0; i < numSamples; ++i) {
+                recorder->m_buffer.push_back(inputBuffer[i]);
+            }
         }
+        // If we can't get the lock, we drop this buffer - better than deadlocking
     }
 
-    return paContinue;
+    return recorder->m_recording.load() ? paContinue : paAbort;
 }
 
 void audio_recorder::process_audio_thread() {
@@ -214,17 +241,20 @@ void audio_recorder::process_audio_thread() {
     batch.reserve(BATCH_SIZE);
 
     while (m_recording) {
-        // Get samples from buffer
-        {
-            std::lock_guard<std::mutex> lock(m_buffer_mutex);
+        // Use try_lock to avoid blocking indefinitely
+        std::unique_lock<std::mutex> lock(m_buffer_mutex, std::try_to_lock);
+
+        if (lock.owns_lock()) {
+            // Get samples from buffer
             while (!m_buffer.empty() && batch.size() < BATCH_SIZE) {
                 batch.push_back(m_buffer.front());
                 m_buffer.pop_front();
             }
+            lock.unlock();
         }
 
         // Process batch if not empty
-        if (!batch.empty() && m_callback) {
+        if (!batch.empty() && m_callback && m_recording) {
             try {
                 m_callback(batch);
             } catch (const std::exception& e) {
@@ -233,9 +263,23 @@ void audio_recorder::process_audio_thread() {
                 std::cerr << "Unknown error in audio callback" << std::endl;
             }
             batch.clear();
-        } else {
-            // Sleep a bit to avoid busy waiting
+        } else if (batch.empty()) {
+            // Only sleep if we didn't get any data
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+
+        // Check recording flag more frequently
+        if (!m_recording) {
+            break;
+        }
+    }
+
+    // Process any remaining samples
+    if (!batch.empty() && m_callback) {
+        try {
+            m_callback(batch);
+        } catch (...) {
+            // Ignore errors during shutdown
         }
     }
 }
