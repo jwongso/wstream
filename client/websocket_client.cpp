@@ -89,40 +89,30 @@ void websocket_client::disconnect() {
     std::cout << "Disconnecting from server..." << std::endl;
     m_connected.store(false);
 
-    // Stop the IO context first to unblock any pending reads
-    m_ioc.stop();
-
-    // Wait briefly for the client thread to notice
-    if (m_client_thread && m_client_thread->joinable()) {
-        // Give it a moment to exit cleanly
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-        // If still running, detach it
-        if (m_client_thread->joinable()) {
-            m_client_thread->detach();
-        }
-    }
-
-    // Now try to close the WebSocket if it's still open
-    if (m_ws && m_ws->is_open()) {
-        try {
-            beast::error_code ec;
-            // Use the non-blocking close with error code
-            m_ws->close(websocket::close_code::normal, ec);
-            // We don't care about the error - we're shutting down anyway
-        } catch (...) {
-            // Ignore any exceptions
-        }
-    }
-
-    // Force close the underlying socket
+    // Don't try to do a proper WebSocket close - just kill the socket
+    // This will cause the server's read() to fail with an error
     if (m_ws) {
         try {
             beast::error_code ec;
-            m_ws->next_layer().cancel(ec);
+            // Force close the underlying TCP socket
             m_ws->next_layer().close(ec);
         } catch (...) {
             // Ignore errors
+        }
+    }
+
+    // Stop IO context
+    m_ioc.stop();
+
+    // Give thread a moment to finish
+    if (m_client_thread && m_client_thread->joinable()) {
+        // Wait briefly
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+        // If still running, detach it
+        if (m_client_thread->joinable()) {
+            std::cout << "Force detaching client thread" << std::endl;
+            m_client_thread->detach();
         }
     }
 
