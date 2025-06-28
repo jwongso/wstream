@@ -11,7 +11,6 @@
 // -------------------------------------------------------------------------------------------------
 
 #include "wstream_app.h"
-#include "websocket_server.h"
 #include "whisper_engine.h"
 #include "text_processor.h"
 #include "websocket_audio_source.h"
@@ -41,7 +40,9 @@ static void signal_handler(int signal) {
     }
 }
 
-wstream_app::wstream_app(const std::string& model_path, audio_source_type source_type, uint16_t websocket_port)
+wstream_app::wstream_app(const std::string& model_path,
+                         audio_source_type source_type,
+                         uint16_t websocket_port)
     : m_model_path(model_path), m_websocket_port(websocket_port), m_audio_source_type(source_type) {
     s_instance = this;
 }
@@ -64,7 +65,8 @@ bool wstream_app::initialize(int argc, char* argv[]) {
         return false;
     }
 
-    std::cout << "Initializing WStream with audio source: " << get_audio_source_name() << std::endl;
+    std::cout << "---> Initializing wstream with audio source: "
+              << get_audio_source_name() << std::endl;
 
     // Validate model path
     if (!validate_model_path(m_model_path)) {
@@ -100,7 +102,7 @@ bool wstream_app::initialize(int argc, char* argv[]) {
         return false;
     }
 
-    std::cout << "WStream initialized successfully." << std::endl;
+    std::cout << "<--- wstream initialized successfully." << std::endl;
     return true;
 }
 
@@ -159,27 +161,13 @@ bool wstream_app::setup_websocket_server() {
 
     // Set up audio callback for WebSocket audio source
     if (m_audio_source_type == audio_source_type::WEBSOCKET_CLIENT) {
-        m_websocket_server->set_audio_callback(
-            [this](const audio_data& audio, websocket::stream<tcp::socket>* client_ws) {
-                handle_websocket_audio(audio.samples, audio.session_id, audio.language);
-
-                // Send acknowledgment back to client
-                if (client_ws) {
-                    nlohmann::json ack_response;
-                    ack_response["type"] = "audio_ack";
-                    ack_response["status"] = "received";
-                    ack_response["samples_count"] = audio.samples.size();
-                    ack_response["session_id"] = audio.session_id;
-
-                    m_websocket_server->send_to_client(client_ws, ack_response);
-                }
-            }
-            );
+        setup_websocket_audio_callback();
     }
 
     // Set up command handler for client commands
     m_websocket_server->set_command_handler(
-        [this](const std::string& command, const nlohmann::json& params, websocket::stream<tcp::socket>* client_ws) -> nlohmann::json {
+        [this](const std::string& command, const nlohmann::json& params,
+               websocket::stream<tcp::socket>* client_ws) -> nlohmann::json {
             nlohmann::json response;
             response["type"] = "response";
             response["action"] = command;
@@ -200,7 +188,8 @@ bool wstream_app::setup_websocket_server() {
                         bool success = set_audio_source_runtime(new_source_type);
                         response["status"] = success ? "success" : "error";
                         response["source"] = source_str;
-                        response["audio_source"] = audio_source_factory::type_to_string(m_audio_source_type);
+                        response["audio_source"] =
+                            audio_source_factory::type_to_string(m_audio_source_type);
                         response["audio_source_name"] = get_audio_source_name();
 
                         if (success) {
@@ -251,8 +240,14 @@ void wstream_app::run() {
 
 void wstream_app::process_audio_loop() {
     std::vector<float> audio_samples;
+    int loop_count = 0;
+    int audio_received_count = 0;
+    int whisper_call_count = 0;
+    int transcription_count = 0;
 
     while (m_is_running) {
+        loop_count++;
+
         // Check SDL events (window close)
         m_is_running = sdl_poll_events();
 
@@ -284,7 +279,43 @@ void wstream_app::process_audio_loop() {
                 if (got_audio && !audio_samples.empty()) {
                     session_id = m_audio_source->get_session_id();
                     language = m_audio_source->get_language();
+                    audio_received_count++;
+
+                    std::cout << "[PROCESS_AUDIO] Retrieved audio chunk #" << audio_received_count
+                              << " with " << audio_samples.size() << " samples"
+                              << " (duration: " << (audio_samples.size() * 1000.0 / 16000.0) << " ms)"
+                              << std::endl;
+
+                    // Check audio levels
+                    float max_val = 0.0f;
+                    float min_val = 0.0f;
+                    float sum = 0.0f;
+                    for (const auto& sample : audio_samples) {
+                        if (sample > max_val) max_val = sample;
+                        if (sample < min_val) min_val = sample;
+                        sum += std::abs(sample);
+                    }
+                    float avg = sum / audio_samples.size();
+
+                    std::cout << "[PROCESS_AUDIO] Audio levels - Min: " << min_val
+                              << ", Max: " << max_val
+                              << ", Avg: " << avg << std::endl;
+
+                    if (avg < 0.001f) {
+                        std::cout << "[PROCESS_AUDIO] WARNING: Audio appears to be silence!" << std::endl;
+                    }
                 }
+            }
+        }
+
+        // Debug log every 1000 loops if no audio
+        if (loop_count % 1000 == 0 && audio_received_count == 0) {
+            std::cout << "[PROCESS_AUDIO] No audio received yet. Loop count: " << loop_count << std::endl;
+
+            // Check if audio source is active
+            if (m_audio_source) {
+                std::cout << "[PROCESS_AUDIO] Audio source '" << m_audio_source->get_name()
+                << "' is " << (m_audio_source->is_active() ? "active" : "inactive") << std::endl;
             }
         }
 
@@ -293,13 +324,22 @@ void wstream_app::process_audio_loop() {
             continue;
         }
 
-        // Process with whisper (outside the lock)
+        // Process with whisper
+        whisper_call_count++;
+        std::cout << "[PROCESS_AUDIO] Sending chunk #" << whisper_call_count
+                  << " to Whisper (" << audio_samples.size() << " samples)" << std::endl;
+
         std::string transcription = m_whisper_engine->transcribe(audio_samples);
 
         if (!transcription.empty()) {
+            transcription_count++;
+            std::cout << "[PROCESS_AUDIO] Whisper returned transcription #" << transcription_count
+                      << ": '" << transcription << "'" << std::endl;
+
             std::string processed_text = m_text_processor->process(transcription);
 
             if (!processed_text.empty()) {
+                std::cout << "[PROCESS_AUDIO] Text processor output: '" << processed_text << "'" << std::endl;
                 std::cout << "[" << get_audio_source_name() << "] " << processed_text << std::endl;
 
                 // Update latest transcription
@@ -311,11 +351,22 @@ void wstream_app::process_audio_loop() {
                 } else {
                     m_websocket_server->queue_transcription(processed_text);
                 }
+            } else {
+                std::cout << "[PROCESS_AUDIO] Text processor returned empty string" << std::endl;
             }
+        } else {
+            std::cout << "[PROCESS_AUDIO] Whisper returned empty transcription for chunk #"
+                      << whisper_call_count << std::endl;
         }
 
         audio_samples.clear();
     }
+
+    std::cout << "[PROCESS_AUDIO] Exiting audio loop. Stats:" << std::endl;
+    std::cout << "  Total loops: " << loop_count << std::endl;
+    std::cout << "  Audio chunks received: " << audio_received_count << std::endl;
+    std::cout << "  Whisper calls: " << whisper_call_count << std::endl;
+    std::cout << "  Transcriptions: " << transcription_count << std::endl;
 }
 
 std::string wstream_app::get_audio_source_name() const {
@@ -374,10 +425,7 @@ bool wstream_app::switch_audio_source(audio_source_type new_source_type) {
     }
 
     // Clear the old source first (this will destroy it)
-    std::cout << "Reseting: " << m_audio_source->get_name() << std::endl;
     m_audio_source.reset();
-    std::cout << "Successfully reseting previous audio source" << std::endl;
-
     // Small delay to ensure destruction is complete
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
@@ -392,6 +440,15 @@ bool wstream_app::switch_audio_source(audio_source_type new_source_type) {
     m_websocket_audio_source = nullptr;
     if (m_audio_source_type == audio_source_type::WEBSOCKET_CLIENT) {
         m_websocket_audio_source = dynamic_cast<websocket_audio_source*>(m_audio_source.get());
+        setup_websocket_audio_callback();
+
+        // Enable audio dump for debugging
+        // if (m_websocket_audio_source) {
+        //     m_websocket_audio_source->enable_audio_dump("websocket_audio_debug.raw");
+        //     std::cout << "[DEBUG] Audio dumping enabled for WebSocket source" << std::endl;
+        //     std::cout << "[DEBUG] You can play the dump file with:" << std::endl;
+        //     std::cout << "  ffplay -f s16le -ar 16000 -ac 1 websocket_audio_debug.raw" << std::endl;
+        // }
     }
 
     std::cout << "Successfully switched to audio source: " << get_audio_source_name() << std::endl;

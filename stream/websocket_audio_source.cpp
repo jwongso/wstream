@@ -38,18 +38,88 @@ void websocket_audio_source::stop() {
     while (m_audio_queue.try_dequeue(packet)) {
         // Just discard
     }
+
+    // Clear accumulator
+    {
+        std::lock_guard<std::mutex> lock(m_accumulator_mutex);
+        m_accumulated_samples.clear();
+    }
 }
 
 bool websocket_audio_source::get_audio_samples(std::vector<float>& samples) {
-    if (!m_active) return false;
+    if (!m_active) {
+        return false;
+    }
 
+    std::lock_guard<std::mutex> lock(m_accumulator_mutex);
+
+    // Add new packets to accumulator
     audio_packet packet;
-    if (m_audio_queue.try_dequeue(packet)) {
-        samples = std::move(packet.samples);
+    int packets_added = 0;
+    while (m_audio_queue.try_dequeue(packet)) {
+        packets_added++;
+        m_accumulated_samples.insert(m_accumulated_samples.end(),
+                                     packet.samples.begin(),
+                                     packet.samples.end());
         m_current_session_id = packet.session_id;
         m_current_language = packet.language;
         m_last_packet_time = std::chrono::steady_clock::now();
+    }
+
+    if (packets_added > 0) {
+        std::cout << "[WebSocket Audio] Added " << packets_added
+                  << " packets to accumulator. Total accumulated: "
+                  << m_accumulated_samples.size() << " samples" << std::endl;
+    }
+
+    // Whisper needs at least 1 second (16000 samples at 16kHz)
+    const size_t CHUNK_SIZE = 16000;
+    const size_t MIN_CHUNK_SIZE = 1600;  // Minimum 100ms for Whisper
+
+    // Check if we have enough samples for a full chunk
+    if (m_accumulated_samples.size() >= CHUNK_SIZE) {
+        // Extract a chunk
+        samples.clear();
+        samples.assign(m_accumulated_samples.begin(),
+                       m_accumulated_samples.begin() + CHUNK_SIZE);
+
+        // Remove the extracted samples
+        m_accumulated_samples.erase(m_accumulated_samples.begin(),
+                                    m_accumulated_samples.begin() + CHUNK_SIZE);
+
+        std::cout << "[WebSocket Audio] Returning " << samples.size()
+                  << " samples. Remaining in accumulator: "
+                  << m_accumulated_samples.size() << std::endl;
+
         return true;
+    }
+
+    // Check if we should flush partial buffer due to timeout
+    auto now = std::chrono::steady_clock::now();
+    auto time_since_last_packet = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                      now - m_last_packet_time).count();
+
+    // If no new audio for 2 seconds and we have some samples, flush them
+    if (time_since_last_packet > 2000 && m_accumulated_samples.size() >= MIN_CHUNK_SIZE) {
+        samples = std::move(m_accumulated_samples);
+        m_accumulated_samples.clear();
+
+        std::cout << "[WebSocket Audio] Timeout flush: returning " << samples.size()
+                  << " samples (no new audio for " << time_since_last_packet << "ms)" << std::endl;
+
+        return true;
+    }
+
+    // Not enough samples yet - only log occasionally to avoid spam
+    if (m_accumulated_samples.size() > 0) {
+        static auto last_log_time = std::chrono::steady_clock::now();
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - last_log_time).count() >= 5) {
+            std::cout << "[WebSocket Audio] Waiting for more audio: "
+                      << m_accumulated_samples.size() << " < " << CHUNK_SIZE
+                      << " (last packet " << time_since_last_packet << "ms ago)" << std::endl;
+            last_log_time = now;
+        }
     }
 
     return false;
@@ -71,6 +141,34 @@ void websocket_audio_source::handle_audio_data(const std::vector<int16_t>& pcm_s
                                                const std::string& language) {
     if (!m_active) return;
 
+    // Debug logging
+    static int packet_count = 0;
+    packet_count++;
+    if (packet_count % 10 == 0) {  // Log every 10th packet
+        std::cout << "[WebSocket Audio] Received packet #" << packet_count
+                  << " with " << pcm_samples.size() << " samples" << std::endl;
+
+        // Check audio levels
+        int16_t max_val = 0;
+        int16_t min_val = 0;
+        for (const auto& sample : pcm_samples) {
+            if (sample > max_val) max_val = sample;
+            if (sample < min_val) min_val = sample;
+        }
+        std::cout << "[WebSocket Audio] Audio range: [" << min_val << ", " << max_val << "]" << std::endl;
+    }
+
+    // Dump audio if enabled
+    if (m_dump_enabled) {
+        std::lock_guard<std::mutex> lock(m_dump_mutex);
+        if (m_audio_dump_file.is_open()) {
+            m_audio_dump_file.write(reinterpret_cast<const char*>(pcm_samples.data()),
+                                    pcm_samples.size() * sizeof(int16_t));
+            m_audio_dump_file.flush();
+            m_total_samples_dumped += pcm_samples.size();
+        }
+    }
+
     audio_packet packet;
 
     // Convert int16_t to float
@@ -87,4 +185,27 @@ void websocket_audio_source::handle_audio_data(const std::vector<int16_t>& pcm_s
 
     m_audio_queue.enqueue(std::move(packet));
     m_last_packet_time = std::chrono::steady_clock::now();
+}
+
+void websocket_audio_source::enable_audio_dump(const std::string& filename) {
+    std::lock_guard<std::mutex> lock(m_dump_mutex);
+    if (m_audio_dump_file.is_open()) {
+        m_audio_dump_file.close();
+    }
+    m_audio_dump_file.open(filename, std::ios::binary);
+    m_dump_enabled = m_audio_dump_file.is_open();
+    m_total_samples_dumped = 0;
+    if (m_dump_enabled) {
+        std::cout << "[WebSocket Audio] Audio dump enabled to file: " << filename << std::endl;
+    }
+}
+
+void websocket_audio_source::disable_audio_dump() {
+    std::lock_guard<std::mutex> lock(m_dump_mutex);
+    m_dump_enabled = false;
+    if (m_audio_dump_file.is_open()) {
+        m_audio_dump_file.close();
+        std::cout << "[WebSocket Audio] Audio dump disabled. Total samples dumped: "
+                  << m_total_samples_dumped << std::endl;
+    }
 }

@@ -18,6 +18,7 @@
 #include "concurrentqueue.h"
 #include "audio_source.h"
 #include "audio_source_factory.h"
+#include "websocket_server.h"
 #include <memory>
 #include <atomic>
 #include <string>
@@ -270,4 +271,25 @@ private:
      * @return Unique pointer to created audio source, nullptr on failure
      */
     std::unique_ptr<audio_source> create_audio_source(audio_source_type source_type);
+
+    void setup_websocket_audio_callback() {
+        if (m_websocket_server) {
+            m_websocket_server->set_audio_callback(
+                [this](const audio_data& audio, websocket::stream<tcp::socket>* client_ws) {
+                    handle_websocket_audio(audio.samples, audio.session_id, audio.language);
+
+                    // Send acknowledgment back to client
+                    if (client_ws) {
+                        nlohmann::json ack_response;
+                        ack_response["type"] = "audio_ack";
+                        ack_response["status"] = "received";
+                        ack_response["samples_count"] = audio.samples.size();
+                        ack_response["session_id"] = audio.session_id;
+
+                        m_websocket_server->send_to_client(client_ws, ack_response);
+                    }
+                }
+            );
+        }
+    }
 };

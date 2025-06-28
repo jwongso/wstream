@@ -17,6 +17,7 @@
 #include <string>
 #include <atomic>
 #include <chrono>
+#include <fstream>
 
 /**
  * @class websocket_audio_source
@@ -96,6 +97,9 @@ public:
                            const std::string& session_id = "",
                            const std::string& language = "");
 
+    void enable_audio_dump(const std::string& filename);
+    void disable_audio_dump();
+
 private:
     /**
      * @struct audio_packet
@@ -132,4 +136,12 @@ private:
 
     /// Timeout for considering source inactive (ms)
     static constexpr int ACTIVITY_TIMEOUT_MS = 5000;
+
+    std::vector<float> m_accumulated_samples;
+    std::mutex m_accumulator_mutex;
+
+    std::ofstream m_audio_dump_file;
+    std::mutex m_dump_mutex;
+    bool m_dump_enabled = false;
+    size_t m_total_samples_dumped = 0;
 };

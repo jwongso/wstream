@@ -386,18 +386,14 @@ void websocket_server::do_session(tcp::socket socket, std::shared_ptr<shared_sta
 
         while (m_is_running) {
             beast::flat_buffer buffer;
-
-            std::cout << "[Session " << session_id << "] Waiting for message..." << std::endl;
-
             beast::error_code ec;
             ws.read(buffer, ec);
 
             if (ec) {
-                std::cout << "[Session " << session_id << "] Read error: " << ec.message() << std::endl;
+                std::cout << "[Session " << session_id << "] Read error: "
+                          << ec.message() << std::endl;
                 break;
             }
-
-            std::cout << "[Session " << session_id << "] Received message, size: " << buffer.size() << std::endl;
 
             std::string_view message(
                 static_cast<const char*>(buffer.data().data()),
@@ -409,7 +405,8 @@ void websocket_server::do_session(tcp::socket socket, std::shared_ptr<shared_sta
         std::cout << "[Session " << session_id << "] Exited read loop" << std::endl;
 
     } catch (beast::system_error const& se) {
-        std::cout << "[Session " << session_id << "] Beast system error: " << se.code().message() << std::endl;
+        std::cout << "[Session " << session_id << "] Beast system error: "
+                  << se.code().message() << std::endl;
         if (se.code() != websocket::error::closed && m_is_running) {
             handle_error(std::string("WebSocket system error: ") + se.code().message(), &ws);
         }
@@ -488,20 +485,6 @@ void websocket_server::process_message(std::string_view message_view,
                         }
                     }).detach();
                 }
-
-                // Send acknowledgment to client
-                nlohmann::json ack_response;
-                ack_response["type"] = "audio_ack";
-                ack_response["status"] = "received";
-                ack_response["samples_count"] = audio.samples.size();
-                ack_response["duration_ms"] = audio.duration_ms();
-
-                if (!audio.session_id.empty()) {
-                    ack_response["session_id"] = audio.session_id;
-                }
-
-                state->send_to_client(client_ws, ack_response);
-
             } catch (const std::exception& e) {
                 handle_error(std::string("Audio processing error: ") + e.what(), client_ws);
             }
