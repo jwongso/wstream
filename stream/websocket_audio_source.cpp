@@ -66,12 +66,6 @@ bool websocket_audio_source::get_audio_samples(std::vector<float>& samples) {
         m_last_packet_time = std::chrono::steady_clock::now();
     }
 
-    if (packets_added > 0) {
-        std::cout << "[WebSocket Audio] Added " << packets_added
-                  << " packets to accumulator. Total accumulated: "
-                  << m_accumulated_samples.size() << " samples" << std::endl;
-    }
-
     // Whisper needs at least 1 second (16000 samples at 16kHz)
     const size_t CHUNK_SIZE = 16000;
     const size_t MIN_CHUNK_SIZE = 1600;  // Minimum 100ms for Whisper
@@ -86,11 +80,6 @@ bool websocket_audio_source::get_audio_samples(std::vector<float>& samples) {
         // Remove the extracted samples
         m_accumulated_samples.erase(m_accumulated_samples.begin(),
                                     m_accumulated_samples.begin() + CHUNK_SIZE);
-
-        std::cout << "[WebSocket Audio] Returning " << samples.size()
-                  << " samples. Remaining in accumulator: "
-                  << m_accumulated_samples.size() << std::endl;
-
         return true;
     }
 
@@ -104,9 +93,6 @@ bool websocket_audio_source::get_audio_samples(std::vector<float>& samples) {
         samples = std::move(m_accumulated_samples);
         m_accumulated_samples.clear();
 
-        std::cout << "[WebSocket Audio] Timeout flush: returning " << samples.size()
-                  << " samples (no new audio for " << time_since_last_packet << "ms)" << std::endl;
-
         return true;
     }
 
@@ -115,9 +101,6 @@ bool websocket_audio_source::get_audio_samples(std::vector<float>& samples) {
         static auto last_log_time = std::chrono::steady_clock::now();
         auto now = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::seconds>(now - last_log_time).count() >= 5) {
-            std::cout << "[WebSocket Audio] Waiting for more audio: "
-                      << m_accumulated_samples.size() << " < " << CHUNK_SIZE
-                      << " (last packet " << time_since_last_packet << "ms ago)" << std::endl;
             last_log_time = now;
         }
     }
@@ -140,23 +123,6 @@ void websocket_audio_source::handle_audio_data(const std::vector<int16_t>& pcm_s
                                                const std::string& session_id,
                                                const std::string& language) {
     if (!m_active) return;
-
-    // Debug logging
-    static int packet_count = 0;
-    packet_count++;
-    if (packet_count % 10 == 0) {  // Log every 10th packet
-        std::cout << "[WebSocket Audio] Received packet #" << packet_count
-                  << " with " << pcm_samples.size() << " samples" << std::endl;
-
-        // Check audio levels
-        int16_t max_val = 0;
-        int16_t min_val = 0;
-        for (const auto& sample : pcm_samples) {
-            if (sample > max_val) max_val = sample;
-            if (sample < min_val) min_val = sample;
-        }
-        std::cout << "[WebSocket Audio] Audio range: [" << min_val << ", " << max_val << "]" << std::endl;
-    }
 
     // Dump audio if enabled
     if (m_dump_enabled) {
