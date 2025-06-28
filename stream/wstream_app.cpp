@@ -319,7 +319,6 @@ void wstream_app::process_audio_loop() {
 }
 
 std::string wstream_app::get_audio_source_name() const {
-    std::lock_guard<std::mutex> lock(m_audio_source_mutex);
     return audio_source_factory::get_type_name(m_audio_source_type);
 }
 
@@ -375,7 +374,9 @@ bool wstream_app::switch_audio_source(audio_source_type new_source_type) {
     }
 
     // Clear the old source first (this will destroy it)
+    std::cout << "Reseting: " << m_audio_source->get_name() << std::endl;
     m_audio_source.reset();
+    std::cout << "Successfully reseting previous audio source" << std::endl;
 
     // Small delay to ensure destruction is complete
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -390,7 +391,7 @@ bool wstream_app::switch_audio_source(audio_source_type new_source_type) {
     // Update typed references
     m_websocket_audio_source = nullptr;
     if (m_audio_source_type == audio_source_type::WEBSOCKET_CLIENT) {
-        m_websocket_audio_source = static_cast<websocket_audio_source*>(m_audio_source.get());
+        m_websocket_audio_source = dynamic_cast<websocket_audio_source*>(m_audio_source.get());
     }
 
     std::cout << "Successfully switched to audio source: " << get_audio_source_name() << std::endl;

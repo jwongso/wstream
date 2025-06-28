@@ -365,17 +365,39 @@ void websocket_server::broadcast_loop() {
 
 void websocket_server::do_session(tcp::socket socket, std::shared_ptr<shared_state> state) {
     websocket::stream<tcp::socket> ws{std::move(socket)};
+
+    // Add a unique ID for this session to track it
+    static std::atomic<int> session_counter{0};
+    int session_id = session_counter++;
+
+    std::cout << "[Session " << session_id << "] Starting..." << std::endl;
+
     try {
         ws.auto_fragment(AUTO_FRAGMENT);
         ws.read_message_max(MAX_MESSAGE_SIZE);
         beast::get_lowest_layer(ws).set_option(tcp::no_delay(TCP_NO_DELAY));
+        ws.set_option(websocket::stream_base::timeout::suggested(
+            beast::role_type::server));
 
         ws.accept();
+        std::cout << "[Session " << session_id << "] WebSocket handshake completed" << std::endl;
+
         state->join(&ws);
 
         while (m_is_running) {
             beast::flat_buffer buffer;
-            ws.read(buffer);
+
+            std::cout << "[Session " << session_id << "] Waiting for message..." << std::endl;
+
+            beast::error_code ec;
+            ws.read(buffer, ec);
+
+            if (ec) {
+                std::cout << "[Session " << session_id << "] Read error: " << ec.message() << std::endl;
+                break;
+            }
+
+            std::cout << "[Session " << session_id << "] Received message, size: " << buffer.size() << std::endl;
 
             std::string_view message(
                 static_cast<const char*>(buffer.data().data()),
@@ -383,19 +405,24 @@ void websocket_server::do_session(tcp::socket socket, std::shared_ptr<shared_sta
 
             process_message(message, &ws, state);
         }
+
+        std::cout << "[Session " << session_id << "] Exited read loop" << std::endl;
+
     } catch (beast::system_error const& se) {
-        if (se.code() != websocket::error::closed) {
-            if (m_is_running) {
-                handle_error(std::string("WebSocket system error: ") + se.code().message(), &ws);
-            }
+        std::cout << "[Session " << session_id << "] Beast system error: " << se.code().message() << std::endl;
+        if (se.code() != websocket::error::closed && m_is_running) {
+            handle_error(std::string("WebSocket system error: ") + se.code().message(), &ws);
         }
     } catch (std::exception const& e) {
+        std::cout << "[Session " << session_id << "] Exception: " << e.what() << std::endl;
         if (m_is_running) {
             handle_error(std::string("WebSocket session error: ") + e.what(), &ws);
         }
     }
 
+    std::cout << "[Session " << session_id << "] Calling state->leave()" << std::endl;
     state->leave(&ws);
+    std::cout << "[Session " << session_id << "] Session ended" << std::endl;
 }
 
 void websocket_server::process_message(std::string_view message_view,
