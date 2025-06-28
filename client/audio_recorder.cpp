@@ -116,16 +116,20 @@ bool audio_recorder::start_recording(audio_callback_t callback) {
 }
 
 void audio_recorder::stop_recording() {
-    if (!m_recording) {
+    if (!m_recording.load()) {
         return;
     }
 
-    m_recording = false;
+    std::cout << "Stopping recording..." << std::endl;
 
+    // First, stop the recording flag
+    m_recording.store(false);
+
+    // Stop the stream first (this stops callbacks)
     if (m_stream) {
         std::cout << "Stopping audio stream..." << std::endl;
         PaError err = Pa_StopStream(m_stream);
-        if (err != paNoError) {
+        if (err != paNoError && err != paStreamIsStopped) {
             std::cerr << "Failed to stop audio stream: " << Pa_GetErrorText(err) << std::endl;
         }
 
@@ -138,40 +142,25 @@ void audio_recorder::stop_recording() {
         m_stream = nullptr;
     }
 
+    // Signal the processing thread to wake up by clearing buffer
+    {
+        std::lock_guard<std::mutex> lock(m_buffer_mutex);
+        m_buffer.clear();
+    }
+
+    // Now wait for the processing thread to finish
     if (m_thread && m_thread->joinable()) {
         std::cout << "Waiting for processing thread to finish..." << std::endl;
 
-        // Wake up the thread if it's sleeping
-        {
-            std::lock_guard<std::mutex> lock(m_buffer_mutex);
-            // Just acquiring and releasing the lock to potentially wake the thread
-        }
-
-        // Wait with a timeout to avoid infinite wait
-        auto start = std::chrono::steady_clock::now();
-        while (m_thread->joinable()) {
-            if (std::chrono::steady_clock::now() - start > std::chrono::seconds(5)) {
-                std::cerr << "Warning: Processing thread did not finish in 5 seconds" << std::endl;
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-
         try {
-            if (m_thread->joinable()) {
-                m_thread->join();
-            }
+            // Should finish quickly now
+            m_thread->join();
         } catch (const std::exception& e) {
             std::cerr << "Error joining thread: " << e.what() << std::endl;
         }
     }
 
     m_thread.reset();
-
-    {
-        std::lock_guard<std::mutex> lock(m_buffer_mutex);
-        m_buffer.clear();
-    }
 
     // Close dump file if open
     {
@@ -182,7 +171,7 @@ void audio_recorder::stop_recording() {
         m_dump_enabled = false;
     }
 
-    std::cout << "Stopped recording" << std::endl;
+    std::cout << "Recording stopped" << std::endl;
 }
 
 int audio_recorder::pa_callback(const void* input, void* output,
@@ -190,18 +179,58 @@ int audio_recorder::pa_callback(const void* input, void* output,
                                 const PaStreamCallbackTimeInfo* timeInfo,
                                 PaStreamCallbackFlags statusFlags,
                                 void* userData) {
-    (void)output; // Unused
+    (void)output;
     (void)timeInfo;
     (void)statusFlags;
 
     audio_recorder* recorder = static_cast<audio_recorder*>(userData);
-    if (!recorder->m_recording) {
+
+    // Check recording flag without lock first
+    if (!recorder->m_recording.load()) {
         return paAbort;
     }
 
     const int16_t* inputBuffer = static_cast<const int16_t*>(input);
     const size_t numSamples = frameCount * CHANNELS;
 
+    // Debug: Check audio levels
+    static int silence_counter = 0;
+    static int callback_counter = 0;
+    callback_counter++;
+
+    // Calculate RMS and peak values
+    double sum = 0.0;
+    int16_t max_sample = 0;
+    int16_t min_sample = 0;
+
+    for (size_t i = 0; i < numSamples; ++i) {
+        int16_t sample = inputBuffer[i];
+        if (sample > max_sample) max_sample = sample;
+        if (sample < min_sample) min_sample = sample;
+
+        double normalized = sample / 32768.0;
+        sum += normalized * normalized;
+    }
+
+    double rms = std::sqrt(sum / numSamples);
+    double db = 20 * std::log10(std::max(rms, 1e-10));
+
+    // Log every 100 callbacks
+    if (callback_counter % 100 == 0) {
+        std::cout << "[AUDIO] Level - RMS: " << rms
+                  << " dB: " << db
+                  << " Peak: [" << min_sample << ", " << max_sample << "]";
+
+        if (db < -50) {
+            silence_counter++;
+            std::cout << " (silence count: " << silence_counter << ")";
+        } else {
+            std::cout << " (SPEECH DETECTED)";
+        }
+        std::cout << std::endl;
+    }
+
+    // Dump audio if enabled
     if (recorder->m_dump_enabled) {
         // Use try_lock to avoid blocking
         std::unique_lock<std::mutex> dump_lock(recorder->m_dump_mutex, std::try_to_lock);
@@ -210,9 +239,11 @@ int audio_recorder::pa_callback(const void* input, void* output,
                 reinterpret_cast<const char*>(inputBuffer),
                 numSamples * sizeof(int16_t)
                 );
+            recorder->m_audio_dump_file.flush();
         }
     }
 
+    // Add samples to buffer with try_lock
     {
         std::unique_lock<std::mutex> lock(recorder->m_buffer_mutex, std::try_to_lock);
         if (lock.owns_lock()) {
@@ -240,48 +271,52 @@ void audio_recorder::process_audio_thread() {
     std::vector<int16_t> batch;
     batch.reserve(BATCH_SIZE);
 
-    while (m_recording) {
-        // Use try_lock to avoid blocking indefinitely
-        std::unique_lock<std::mutex> lock(m_buffer_mutex, std::try_to_lock);
+    while (m_recording.load()) {
+        bool got_data = false;
 
-        if (lock.owns_lock()) {
-            // Get samples from buffer
-            while (!m_buffer.empty() && batch.size() < BATCH_SIZE) {
-                batch.push_back(m_buffer.front());
-                m_buffer.pop_front();
+        // Use try_lock without timeout
+        {
+            std::unique_lock<std::mutex> lock(m_buffer_mutex, std::defer_lock);
+            if (lock.try_lock()) {
+                // Get samples from buffer
+                while (!m_buffer.empty() && batch.size() < BATCH_SIZE) {
+                    batch.push_back(m_buffer.front());
+                    m_buffer.pop_front();
+                    got_data = true;
+                }
             }
-            lock.unlock();
+        }
+
+        // Check if we should exit before processing
+        if (!m_recording.load()) {
+            break;
         }
 
         // Process batch if not empty
-        if (!batch.empty() && m_callback && m_recording) {
+        if (got_data && !batch.empty() && m_callback) {
             try {
                 m_callback(batch);
             } catch (const std::exception& e) {
+                // Check if it's a shutdown-related error
+                std::string error_msg = e.what();
+                if (error_msg.find("Operation canceled") != std::string::npos ||
+                    error_msg.find("Bad file descriptor") != std::string::npos) {
+                    // These are expected during shutdown, just exit
+                    break;
+                }
                 std::cerr << "Error in audio callback: " << e.what() << std::endl;
             } catch (...) {
                 std::cerr << "Unknown error in audio callback" << std::endl;
             }
             batch.clear();
-        } else if (batch.empty()) {
+        } else if (!got_data) {
             // Only sleep if we didn't get any data
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
-
-        // Check recording flag more frequently
-        if (!m_recording) {
-            break;
-        }
     }
 
-    // Process any remaining samples
-    if (!batch.empty() && m_callback) {
-        try {
-            m_callback(batch);
-        } catch (...) {
-            // Ignore errors during shutdown
-        }
-    }
+    // Don't try to send remaining data during shutdown
+    batch.clear();
 }
 
 std::vector<std::string> audio_recorder::list_devices() {
@@ -308,6 +343,26 @@ std::vector<std::string> audio_recorder::list_devices() {
     return result;
 }
 
+int audio_recorder::find_device_by_name(const std::string& name) {
+    int numDevices = Pa_GetDeviceCount();
+    if (numDevices < 0) {
+        std::cerr << "PortAudio error: " << Pa_GetErrorText(numDevices) << std::endl;
+        return -1;
+    }
+
+    for (int i = 0; i < numDevices; ++i) {
+        const PaDeviceInfo* deviceInfo = Pa_GetDeviceInfo(i);
+        if (deviceInfo && deviceInfo->maxInputChannels > 0) {
+            std::string deviceName = deviceInfo->name;
+            if (deviceName.find(name) != std::string::npos) {
+                return i;
+            }
+        }
+    }
+
+    return -1;
+}
+
 void audio_recorder::enable_audio_dump(const std::string& filename) {
     std::lock_guard<std::mutex> lock(m_dump_mutex);
     if (m_audio_dump_file.is_open()) {
@@ -327,24 +382,4 @@ void audio_recorder::disable_audio_dump() {
         m_audio_dump_file.close();
         std::cout << "Audio dump disabled" << std::endl;
     }
-}
-
-int audio_recorder::find_device_by_name(const std::string& name) {
-    int numDevices = Pa_GetDeviceCount();
-    if (numDevices < 0) {
-        std::cerr << "PortAudio error: " << Pa_GetErrorText(numDevices) << std::endl;
-        return -1;
-    }
-
-    for (int i = 0; i < numDevices; ++i) {
-        const PaDeviceInfo* deviceInfo = Pa_GetDeviceInfo(i);
-        if (deviceInfo && deviceInfo->maxInputChannels > 0) {
-            std::string deviceName = deviceInfo->name;
-            if (deviceName.find(name) != std::string::npos) {
-                return i;
-            }
-        }
-    }
-
-    return -1;
 }

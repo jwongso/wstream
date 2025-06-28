@@ -49,11 +49,8 @@ bool websocket_client::connect(const std::string& uri) {
         tcp::resolver resolver(m_ioc);
         auto const results = resolver.resolve(host, port);
 
-        // Set timeout and connect - Compatible with older Boost versions
+        // Connect
         auto& socket = m_ws->next_layer();
-
-        // Simple connect without timeout for maximum compatibility
-        // If you need timeout, you can implement it using async operations
         auto ep = net::connect(socket, results);
 
         // Update the host for the handshake if needed
@@ -82,15 +79,15 @@ bool websocket_client::connect(const std::string& uri) {
 }
 
 void websocket_client::disconnect() {
-    if (!m_running) {
+    // Use atomic flag to ensure single execution
+    bool expected = true;
+    if (!m_running.compare_exchange_strong(expected, false)) {
+        // Already disconnecting
         return;
     }
 
     std::cout << "Disconnecting from server..." << std::endl;
-
-    // Set flags
-    m_running = false;
-    m_connected = false;
+    m_connected.store(false);
 
     // Force close the socket to unblock read operations
     if (m_ws) {
@@ -129,13 +126,12 @@ void websocket_client::disconnect() {
 bool websocket_client::send_audio_data(const std::vector<int16_t>& pcm_data,
                                        const std::string& session_id,
                                        const std::string& language) {
-    if (!m_connected) {
-        std::cerr << "Not connected to server" << std::endl;
+    if (!m_connected.load() || !m_running.load()) {
+        // Silently return false during shutdown
         return false;
     }
 
     try {
-        std::lock_guard<std::mutex> lock(m_write_mutex);
         json audio_message;
         audio_message["type"] = "audio";
         audio_message["sample_rate"] = 16000;
@@ -173,12 +169,30 @@ bool websocket_client::send_audio_data(const std::vector<int16_t>& pcm_data,
             debug_log("Sending message: " + log_message.dump());
         }
 
+        // Check again before sending
+        if (!m_connected.load() || !m_running.load()) {
+            return false;
+        }
+
+        std::lock_guard<std::mutex> lock(m_write_mutex);
         m_ws->write(net::buffer(message_str));
 
         return true;
 
     } catch (const std::exception& e) {
-        std::cerr << "Error sending audio data: " << e.what() << std::endl;
+        std::string error_msg = e.what();
+
+        // Check if it's a shutdown-related error
+        if (error_msg.find("Operation canceled") != std::string::npos ||
+            error_msg.find("Bad file descriptor") != std::string::npos ||
+            error_msg.find("Connection reset") != std::string::npos) {
+            // Expected during shutdown, don't log as error
+            m_connected.store(false);
+            return false;
+        }
+
+        // Log other errors
+        std::cerr << "Error sending audio data: " << error_msg << std::endl;
         return false;
     }
 }
@@ -207,6 +221,8 @@ bool websocket_client::set_audio_source(const std::string& source_type) {
         };
 
         std::string message_str = command.dump();
+
+        std::lock_guard<std::mutex> lock(m_write_mutex);
         m_ws->write(net::buffer(message_str));
 
         std::cout << "Sent command to set audio source to: " << source_type << std::endl;
@@ -231,6 +247,8 @@ bool websocket_client::get_server_status() {
         };
 
         std::string message_str = command.dump();
+
+        std::lock_guard<std::mutex> lock(m_write_mutex);
         m_ws->write(net::buffer(message_str));
 
         return true;
@@ -250,13 +268,21 @@ void websocket_client::client_thread_func() {
     try {
         read_messages();
     } catch (const std::exception& e) {
-        std::cerr << "Client thread error: " << e.what() << std::endl;
-        m_connected = false;
+        std::string error_msg = e.what();
 
-        std::lock_guard<std::mutex> lock(m_callback_mutex);
-        if (m_error_callback) {
-            m_error_callback(e.what());
+        // Only log non-shutdown errors
+        if (m_running.load() &&
+            error_msg.find("Operation canceled") == std::string::npos &&
+            error_msg.find("Bad file descriptor") == std::string::npos) {
+            std::cerr << "Client thread error: " << error_msg << std::endl;
+
+            std::lock_guard<std::mutex> lock(m_callback_mutex);
+            if (m_error_callback) {
+                m_error_callback(error_msg);
+            }
         }
+
+        m_connected.store(false);
     }
 }
 
