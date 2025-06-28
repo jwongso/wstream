@@ -89,23 +89,12 @@ void websocket_client::disconnect() {
     std::cout << "Disconnecting from server..." << std::endl;
     m_connected.store(false);
 
-    // Send proper WebSocket close frame
-    if (m_ws && m_ws->is_open()) {
-        try {
-            beast::error_code ec;
-            m_ws->close(websocket::close_code::normal, ec);
-
-            // Give the close frame time to be sent
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        } catch (...) {
-            // Ignore errors
-        }
-    }
-
+    // Don't try to do a proper WebSocket close - just kill the socket
+    // This will cause the server's read() to fail with an error
     if (m_ws) {
         try {
             beast::error_code ec;
-            m_ws->next_layer().shutdown(tcp::socket::shutdown_both, ec);
+            // Force close the underlying TCP socket
             m_ws->next_layer().close(ec);
         } catch (...) {
             // Ignore errors

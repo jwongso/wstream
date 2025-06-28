@@ -347,7 +347,6 @@ int main(int argc, char* argv[]) {
     }
 
     // Then disconnect WebSocket
-    std::cout << "Disconnecting from server..." << std::endl;
     client.disconnect();
 
     // Give everything a moment to clean up
