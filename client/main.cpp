@@ -354,11 +354,20 @@ int main(int argc, char* argv[]) {
     }
 
     // Cleanup
+    std::cout << "Shutting down..." << std::endl;
+
+    // Stop recording first
     if (recorder.is_recording()) {
+        std::cout << "Stopping recording..." << std::endl;
         recorder.stop_recording();
     }
 
+    // Then disconnect WebSocket
+    std::cout << "Disconnecting from server..." << std::endl;
     client.disconnect();
+
+    // Give everything a moment to clean up
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     std::cout << "Goodbye!" << std::endl;
     return 0;

@@ -86,25 +86,42 @@ void websocket_client::disconnect() {
         return;
     }
 
+    std::cout << "Disconnecting from server..." << std::endl;
+
+    // Set flags
     m_running = false;
     m_connected = false;
 
-    try {
-        beast::error_code ec;
-        m_ws->close(websocket::close_code::normal, ec);
-
-        if (ec) {
-            std::cerr << "Error closing connection: " << ec.message() << std::endl;
+    // Force close the socket to unblock read operations
+    if (m_ws) {
+        try {
+            beast::error_code ec;
+            // Force close the underlying socket
+            m_ws->next_layer().cancel(ec);
+            m_ws->next_layer().shutdown(tcp::socket::shutdown_both, ec);
+            m_ws->next_layer().close(ec);
+        } catch (...) {
+            // Ignore errors
         }
-    } catch (const std::exception& e) {
-        std::cerr << "Error during disconnect: " << e.what() << std::endl;
     }
 
+    // Stop IO context
+    m_ioc.stop();
+
+    // Give thread a moment to finish
     if (m_client_thread && m_client_thread->joinable()) {
-        m_client_thread->join();
+        // Wait briefly
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+        // If still running, detach it
+        if (m_client_thread->joinable()) {
+            std::cout << "Force detaching client thread" << std::endl;
+            m_client_thread->detach();
+        }
     }
 
     m_client_thread.reset();
+    m_ws.reset();
 
     std::cout << "Disconnected from server" << std::endl;
 }
