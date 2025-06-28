@@ -240,14 +240,8 @@ void wstream_app::run() {
 
 void wstream_app::process_audio_loop() {
     std::vector<float> audio_samples;
-    int loop_count = 0;
-    int audio_received_count = 0;
-    int whisper_call_count = 0;
-    int transcription_count = 0;
 
     while (m_is_running) {
-        loop_count++;
-
         // Check SDL events (window close)
         m_is_running = sdl_poll_events();
 
@@ -270,7 +264,6 @@ void wstream_app::process_audio_loop() {
         // Safely get audio from the active source
         bool got_audio = false;
         std::string session_id;
-        std::string language;
 
         {
             std::lock_guard<std::mutex> lock(m_audio_source_mutex);
@@ -278,44 +271,7 @@ void wstream_app::process_audio_loop() {
                 got_audio = m_audio_source->get_audio_samples(audio_samples);
                 if (got_audio && !audio_samples.empty()) {
                     session_id = m_audio_source->get_session_id();
-                    language = m_audio_source->get_language();
-                    audio_received_count++;
-
-                    std::cout << "[PROCESS_AUDIO] Retrieved audio chunk #" << audio_received_count
-                              << " with " << audio_samples.size() << " samples"
-                              << " (duration: " << (audio_samples.size() * 1000.0 / 16000.0) << " ms)"
-                              << std::endl;
-
-                    // Check audio levels
-                    float max_val = 0.0f;
-                    float min_val = 0.0f;
-                    float sum = 0.0f;
-                    for (const auto& sample : audio_samples) {
-                        if (sample > max_val) max_val = sample;
-                        if (sample < min_val) min_val = sample;
-                        sum += std::abs(sample);
-                    }
-                    float avg = sum / audio_samples.size();
-
-                    std::cout << "[PROCESS_AUDIO] Audio levels - Min: " << min_val
-                              << ", Max: " << max_val
-                              << ", Avg: " << avg << std::endl;
-
-                    if (avg < 0.001f) {
-                        std::cout << "[PROCESS_AUDIO] WARNING: Audio appears to be silence!" << std::endl;
-                    }
                 }
-            }
-        }
-
-        // Debug log every 1000 loops if no audio
-        if (loop_count % 1000 == 0 && audio_received_count == 0) {
-            std::cout << "[PROCESS_AUDIO] No audio received yet. Loop count: " << loop_count << std::endl;
-
-            // Check if audio source is active
-            if (m_audio_source) {
-                std::cout << "[PROCESS_AUDIO] Audio source '" << m_audio_source->get_name()
-                << "' is " << (m_audio_source->is_active() ? "active" : "inactive") << std::endl;
             }
         }
 
@@ -325,21 +281,12 @@ void wstream_app::process_audio_loop() {
         }
 
         // Process with whisper
-        whisper_call_count++;
-        std::cout << "[PROCESS_AUDIO] Sending chunk #" << whisper_call_count
-                  << " to Whisper (" << audio_samples.size() << " samples)" << std::endl;
-
         std::string transcription = m_whisper_engine->transcribe(audio_samples);
 
         if (!transcription.empty()) {
-            transcription_count++;
-            std::cout << "[PROCESS_AUDIO] Whisper returned transcription #" << transcription_count
-                      << ": '" << transcription << "'" << std::endl;
-
             std::string processed_text = m_text_processor->process(transcription);
 
             if (!processed_text.empty()) {
-                std::cout << "[PROCESS_AUDIO] Text processor output: '" << processed_text << "'" << std::endl;
                 std::cout << "[" << get_audio_source_name() << "] " << processed_text << std::endl;
 
                 // Update latest transcription
@@ -351,22 +298,10 @@ void wstream_app::process_audio_loop() {
                 } else {
                     m_websocket_server->queue_transcription(processed_text);
                 }
-            } else {
-                std::cout << "[PROCESS_AUDIO] Text processor returned empty string" << std::endl;
             }
-        } else {
-            std::cout << "[PROCESS_AUDIO] Whisper returned empty transcription for chunk #"
-                      << whisper_call_count << std::endl;
         }
-
         audio_samples.clear();
     }
-
-    std::cout << "[PROCESS_AUDIO] Exiting audio loop. Stats:" << std::endl;
-    std::cout << "  Total loops: " << loop_count << std::endl;
-    std::cout << "  Audio chunks received: " << audio_received_count << std::endl;
-    std::cout << "  Whisper calls: " << whisper_call_count << std::endl;
-    std::cout << "  Transcriptions: " << transcription_count << std::endl;
 }
 
 std::string wstream_app::get_audio_source_name() const {

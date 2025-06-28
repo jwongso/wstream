@@ -199,43 +199,6 @@ int audio_recorder::pa_callback(const void* input, void* output,
     const int16_t* inputBuffer = static_cast<const int16_t*>(input);
     const size_t numSamples = frameCount * CHANNELS;
 
-    // Debug: Check audio levels
-    static int silence_counter = 0;
-    static int callback_counter = 0;
-    callback_counter++;
-
-    // Calculate RMS and peak values
-    double sum = 0.0;
-    int16_t max_sample = 0;
-    int16_t min_sample = 0;
-
-    for (size_t i = 0; i < numSamples; ++i) {
-        int16_t sample = inputBuffer[i];
-        if (sample > max_sample) max_sample = sample;
-        if (sample < min_sample) min_sample = sample;
-
-        double normalized = sample / 32768.0;
-        sum += normalized * normalized;
-    }
-
-    double rms = std::sqrt(sum / numSamples);
-    double db = 20 * std::log10(std::max(rms, 1e-10));
-
-    // Log every 100 callbacks
-    if (callback_counter % 100 == 0) {
-        std::cout << "[AUDIO] Level - RMS: " << rms
-                  << " dB: " << db
-                  << " Peak: [" << min_sample << ", " << max_sample << "]";
-
-        if (db < -50) {
-            silence_counter++;
-            std::cout << " (silence count: " << silence_counter << ")";
-        } else {
-            std::cout << " (SPEECH DETECTED)";
-        }
-        std::cout << std::endl;
-    }
-
     // Dump audio if enabled
     if (recorder->m_dump_enabled) {
         // Use try_lock to avoid blocking
