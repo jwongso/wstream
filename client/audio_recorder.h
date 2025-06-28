@@ -9,6 +9,7 @@
 #include <mutex>
 #include <deque>
 #include <fstream>
+#include <condition_variable>
 
 /**
  * @class audio_recorder_pa
@@ -100,6 +101,9 @@ private:
     std::ofstream m_audio_dump_file;
     std::mutex m_dump_mutex;
     bool m_dump_enabled = false;
+
+    std::condition_variable m_cv;
+    std::mutex m_cv_mutex;
 
     /**
      * @brief PortAudio callback function

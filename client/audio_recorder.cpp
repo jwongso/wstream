@@ -2,6 +2,7 @@
 #include <iostream>
 #include <chrono>
 #include <cstring>
+#include <fstream>
 #include <cmath>
 
 audio_recorder::audio_recorder() {
@@ -125,6 +126,9 @@ void audio_recorder::stop_recording() {
     // First, stop the recording flag
     m_recording.store(false);
 
+    // Wake up the processing thread
+    m_cv.notify_all();
+
     // Stop the stream first (this stops callbacks)
     if (m_stream) {
         std::cout << "Stopping audio stream..." << std::endl;
@@ -142,18 +146,14 @@ void audio_recorder::stop_recording() {
         m_stream = nullptr;
     }
 
-    // Signal the processing thread to wake up by clearing buffer
-    {
-        std::lock_guard<std::mutex> lock(m_buffer_mutex);
-        m_buffer.clear();
-    }
+    // Wake up the processing thread again in case it's waiting
+    m_cv.notify_all();
 
     // Now wait for the processing thread to finish
     if (m_thread && m_thread->joinable()) {
         std::cout << "Waiting for processing thread to finish..." << std::endl;
 
         try {
-            // Should finish quickly now
             m_thread->join();
         } catch (const std::exception& e) {
             std::cerr << "Error joining thread: " << e.what() << std::endl;
@@ -161,6 +161,12 @@ void audio_recorder::stop_recording() {
     }
 
     m_thread.reset();
+
+    // Clear any remaining buffer data
+    {
+        std::lock_guard<std::mutex> lock(m_buffer_mutex);
+        m_buffer.clear();
+    }
 
     // Close dump file if open
     {
@@ -259,6 +265,9 @@ int audio_recorder::pa_callback(const void* input, void* output,
             for (size_t i = 0; i < numSamples; ++i) {
                 recorder->m_buffer.push_back(inputBuffer[i]);
             }
+
+            // Notify processing thread that data is available
+            recorder->m_cv.notify_one();
         }
         // If we can't get the lock, we drop this buffer - better than deadlocking
     }
@@ -274,10 +283,24 @@ void audio_recorder::process_audio_thread() {
     while (m_recording.load()) {
         bool got_data = false;
 
-        // Use try_lock without timeout
+        // Wait for data with timeout
         {
-            std::unique_lock<std::mutex> lock(m_buffer_mutex, std::defer_lock);
-            if (lock.try_lock()) {
+            std::unique_lock<std::mutex> lock(m_cv_mutex);
+            // Wait for notification or timeout every 100ms to check m_recording
+            m_cv.wait_for(lock, std::chrono::milliseconds(100), [this] {
+                return !m_recording.load() || !m_buffer.empty();
+            });
+        }
+
+        // Check if we should exit
+        if (!m_recording.load()) {
+            break;
+        }
+
+        // Try to get data from buffer
+        {
+            std::unique_lock<std::mutex> lock(m_buffer_mutex, std::try_to_lock);
+            if (lock.owns_lock()) {
                 // Get samples from buffer
                 while (!m_buffer.empty() && batch.size() < BATCH_SIZE) {
                     batch.push_back(m_buffer.front());
@@ -285,11 +308,6 @@ void audio_recorder::process_audio_thread() {
                     got_data = true;
                 }
             }
-        }
-
-        // Check if we should exit before processing
-        if (!m_recording.load()) {
-            break;
         }
 
         // Process batch if not empty
@@ -309,9 +327,6 @@ void audio_recorder::process_audio_thread() {
                 std::cerr << "Unknown error in audio callback" << std::endl;
             }
             batch.clear();
-        } else if (!got_data) {
-            // Only sleep if we didn't get any data
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
     }
 
