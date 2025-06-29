@@ -18,7 +18,10 @@
 #include "concurrentqueue.h"
 #include "audio_source.h"
 #include "audio_source_factory.h"
+#include "benchmark_manager.h"
 #include "websocket_server.h"
+#include "transcription_marker.h"
+#include "audio_playback_manager.h"
 #include <memory>
 #include <atomic>
 #include <string>
@@ -59,7 +62,7 @@ class websocket_audio_source;
 class wstream_app {
 public:
     /// Default model path for Whisper
-    static constexpr const char* DEFAULT_MODEL_PATH = "models/ggml-small.en-q5_1.bin";
+    static constexpr const char* DEFAULT_MODEL_PATH = "models/ggml-small.en-tdrz.bin";
 
     /// Default WebSocket server port
     static constexpr uint16_t DEFAULT_WEBSOCKET_PORT = 8080;
@@ -178,6 +181,10 @@ public:
      */
     bool is_running() const { return m_is_running; }
 
+    bool start_benchmark(const std::string& wav_path = "./benchmark.wav");
+    void stop_benchmark();
+    bool is_benchmark_mode() const { return m_benchmark_mode; }
+
 private:
     /// Atomic flag controlling the main application loop
     std::atomic<bool> m_is_running{true};
@@ -213,6 +220,15 @@ private:
     /// Switching audio source mutex
     mutable std::mutex m_audio_source_mutex;
     std::atomic<bool> m_switching_source{false};
+
+    // Benchmark mode
+    bool m_benchmark_mode{false};
+    std::unique_ptr<benchmark_manager> m_benchmark_manager;
+    int m_benchmark_chunk_size_ms;
+
+    transcription_marker m_transcription_marker;
+
+    std::unique_ptr<audio_playback_manager> m_playback_manager;
 
     /**
      * @brief Validates that a model file exists and is accessible
@@ -292,4 +308,6 @@ private:
             );
         }
     }
+
+    void update_comparison_table(const benchmark_manager::benchmark_results& results);
 };

@@ -21,7 +21,8 @@
  */
 enum class audio_source_type {
     SDL_MICROPHONE,   ///< Local microphone via SDL2
-    WEBSOCKET_CLIENT  ///< Remote client via WebSocket
+    WEBSOCKET_CLIENT, ///< Remote client via WebSocket
+    BENCHMARK
 };
 
 /**

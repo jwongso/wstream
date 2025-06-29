@@ -54,10 +54,18 @@ std::vector<T> decode_to(const std::string& encoded) {
 }
 
 /**
-     * @brief Fast in-place decode for int16_t audio data (specialized)
-     * @param encoded Base64 encoded string
-     * @param output Output vector to store decoded int16_t samples
-     * @return true if successful, false if invalid input
-     */
+ * @brief Fast in-place decode for int16_t audio data (specialized)
+ * @param encoded Base64 encoded string
+ * @param output Output vector to store decoded int16_t samples
+ * @return true if successful, false if invalid input
+ */
 bool decode_audio_fast(const std::string& encoded, std::vector<int16_t>& output);
-}
+
+/**
+ * @brief Encode audio samples to Base64
+ * @param samples 16-bit PCM audio samples
+ * @return Base64 encoded string
+ */
+std::string encode_audio(const std::vector<int16_t>& samples);
+
+} // base64

@@ -44,6 +44,8 @@ set(LIB_SOURCES
     websocket_audio_source.cpp
     audio_source_factory.cpp
     base64.cpp
+    benchmark_audio_source.cpp
+    benchmark_manager.cpp
 )
 
 set(LIB_HEADERS
@@ -56,6 +58,10 @@ set(LIB_HEADERS
     websocket_audio_source.h
     audio_source_factory.h
     base64.h
+    benchmark_audio_source.h
+    benchmark_manager.h
+    transcription_marker.h
+    audio_playback_manager.h
 )
 
 add_library(${LIB_TARGET} STATIC ${LIB_SOURCES} ${LIB_HEADERS})

@@ -12,6 +12,7 @@
 #include "audio_source_factory.h"
 #include "audio_processor.h"
 #include "websocket_audio_source.h"
+#include "benchmark_audio_source.h"
 #include <iostream>
 #include <algorithm>
 #include <cctype>
@@ -42,6 +43,21 @@ std::unique_ptr<audio_source> audio_source_factory::create(audio_source_type typ
         }
     }
 
+    case audio_source_type::BENCHMARK: {
+        std::cout << "[Factory] Creating benchmark audio source..." << std::endl;
+        benchmark_audio_source::config config;
+        config.wav_file_path = "./benchmark.wav";
+        config.reference_text_path = "./benchmark.txt";
+        auto source = std::make_unique<benchmark_audio_source>(config);
+        if (source->initialize()) {
+            std::cout << "[Factory] Benchmark audio source created successfully" << std::endl;
+            return source;
+        } else {
+            std::cerr << "[Factory] Failed to initialize benchmark audio source" << std::endl;
+            return nullptr;
+        }
+    }
+
     default:
         std::cerr << "[Factory] Unknown audio source type: " << static_cast<int>(type) << std::endl;
         return nullptr;
@@ -54,6 +70,8 @@ std::string audio_source_factory::get_type_name(audio_source_type type) {
         return "SDL Microphone";
     case audio_source_type::WEBSOCKET_CLIENT:
         return "WebSocket Client";
+    case audio_source_type::BENCHMARK:
+        return "Benchmark audio";
     default:
         return "Unknown";
     }
@@ -69,6 +87,8 @@ audio_source_type audio_source_factory::parse_type(const std::string& type_str) 
         return audio_source_type::SDL_MICROPHONE;
     } else if (lower_str == "websocket" || lower_str == "ws" || lower_str == "client") {
         return audio_source_type::WEBSOCKET_CLIENT;
+    } else if (lower_str == "benchmark" || lower_str == "bench") {
+        return audio_source_type::BENCHMARK;
     }
 
     std::cerr << "[Factory] Unknown audio source type string: '" << type_str
@@ -82,6 +102,8 @@ std::string audio_source_factory::type_to_string(audio_source_type type) {
         return "microphone";
     case audio_source_type::WEBSOCKET_CLIENT:
         return "websocket";
+    case audio_source_type::BENCHMARK:
+        return "benchmark";
     default:
         return "unknown";
     }
@@ -90,7 +112,8 @@ std::string audio_source_factory::type_to_string(audio_source_type type) {
 std::vector<audio_source_type> audio_source_factory::get_available_types() {
     return {
         audio_source_type::SDL_MICROPHONE,
-        audio_source_type::WEBSOCKET_CLIENT
+        audio_source_type::WEBSOCKET_CLIENT,
+        audio_source_type::BENCHMARK
     };
 }
 

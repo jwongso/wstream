@@ -151,3 +151,13 @@ bool base64::decode_audio_fast(const std::string& encoded, std::vector<int16_t>&
 
     return true;
 }
+
+std::string base64::encode_audio(const std::vector<int16_t>& samples) {
+    if (samples.empty()) {
+        return "";
+    }
+
+    // Convert int16_t vector to bytes
+    const size_t byte_size = samples.size() * sizeof(int16_t);
+    return encode(samples.data(), byte_size);
+}

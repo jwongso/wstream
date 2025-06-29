@@ -8,6 +8,7 @@
 #include <thread>
 #include <string>
 #include <algorithm>
+#include <fstream>
 
 #ifdef __APPLE__
 #include <CoreFoundation/CoreFoundation.h>
@@ -52,6 +53,221 @@ void print_usage(const char* program_name) {
     std::cout << "  audio_device       Audio device name (default: system default)\n\n";
     std::cout << "Example:\n";
     std::cout << "  " << program_name << " --verbose ws://localhost:8080 \"Built-in Microphone\"\n";
+}
+
+/**
+ * @brief Load PCM audio data from a WAV file
+ * @param filepath Path to the WAV file
+ * @param pcm_data Vector to receive the PCM samples
+ * @return true if loading successful, false otherwise
+ *
+ * @details Reads and validates a WAV file, extracting 16-bit PCM audio data.
+ * Supports mono/stereo files and automatically converts stereo to mono if needed.
+ */
+bool load_wav_file(const std::string& filepath, std::vector<int16_t>& pcm_data) {
+    // WAV file header structure
+    struct wav_header {
+        char riff[4];               // "RIFF"
+        uint32_t file_size;         // File size - 8
+        char wave[4];               // "WAVE"
+        char fmt[4];                // "fmt "
+        uint32_t fmt_size;          // Format chunk size
+        uint16_t audio_format;      // Audio format (1 = PCM)
+        uint16_t channels;          // Number of channels
+        uint32_t sample_rate;       // Sample rate
+        uint32_t byte_rate;         // Byte rate
+        uint16_t block_align;       // Block align
+        uint16_t bits_per_sample;   // Bits per sample
+    };
+
+    std::ifstream file(filepath, std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "Error: Cannot open WAV file: " << filepath << std::endl;
+        return false;
+    }
+
+    // Read WAV header
+    wav_header header;
+    file.read(reinterpret_cast<char*>(&header), sizeof(wav_header));
+    if (!file.good()) {
+        std::cerr << "Error: Failed to read WAV header" << std::endl;
+        return false;
+    }
+
+    // Validate WAV format
+    if (std::strncmp(header.riff, "RIFF", 4) != 0 ||
+        std::strncmp(header.wave, "WAVE", 4) != 0 ||
+        std::strncmp(header.fmt, "fmt ", 4) != 0) {
+        std::cerr << "Error: Invalid WAV file format" << std::endl;
+        return false;
+    }
+
+    // Check audio format
+    if (header.audio_format != 1) {  // PCM
+        std::cerr << "Error: Only PCM format is supported" << std::endl;
+        return false;
+    }
+
+    // Check bits per sample
+    if (header.bits_per_sample != 16) {
+        std::cerr << "Error: Only 16-bit PCM is supported, got "
+                  << header.bits_per_sample << " bits" << std::endl;
+        return false;
+    }
+
+    // Check sample rate
+    const uint32_t EXPECTED_SAMPLE_RATE = 16000;
+    if (header.sample_rate != EXPECTED_SAMPLE_RATE) {
+        std::cerr << "Warning: Sample rate mismatch. Expected " << EXPECTED_SAMPLE_RATE
+                  << " Hz, got " << header.sample_rate << " Hz" << std::endl;
+        // Continue anyway, but warn the user
+    }
+
+    // Find data chunk
+    char chunk_id[4];
+    uint32_t chunk_size;
+    bool found_data = false;
+
+    // Skip any remaining bytes in the fmt chunk
+    if (header.fmt_size > 16) {
+        file.seekg(header.fmt_size - 16, std::ios::cur);
+    }
+
+    // Search for the data chunk
+    while (file.read(chunk_id, 4)) {
+        file.read(reinterpret_cast<char*>(&chunk_size), 4);
+
+        if (std::strncmp(chunk_id, "data", 4) == 0) {
+            found_data = true;
+            break;
+        } else {
+            // Skip this chunk
+            file.seekg(chunk_size, std::ios::cur);
+        }
+    }
+
+    if (!found_data) {
+        std::cerr << "Error: Could not find data chunk in WAV file" << std::endl;
+        return false;
+    }
+
+    // Calculate number of samples
+    size_t num_samples = chunk_size / (header.bits_per_sample / 8);
+    size_t num_frames = num_samples / header.channels;
+
+    // Resize output vector
+    pcm_data.clear();
+    if (header.channels == 1) {
+        // Mono - allocate exact size
+        pcm_data.resize(num_samples);
+    } else {
+        // Stereo - will convert to mono
+        pcm_data.resize(num_frames);
+    }
+
+    // Read PCM data
+    std::vector<int16_t> raw_data(num_samples);
+    file.read(reinterpret_cast<char*>(raw_data.data()), chunk_size);
+    if (!file.good() && !file.eof()) {
+        std::cerr << "Error: Failed to read audio data" << std::endl;
+        return false;
+    }
+
+    // Handle mono/stereo conversion
+    if (header.channels == 1) {
+        // Mono - direct copy
+        std::copy(raw_data.begin(), raw_data.end(), pcm_data.begin());
+    } else {
+        // Stereo - convert to mono by averaging channels
+        for (size_t i = 0; i < num_frames; i++) {
+            int32_t sum = 0;
+            for (uint16_t c = 0; c < header.channels; c++) {
+                sum += raw_data[i * header.channels + c];
+            }
+            pcm_data[i] = static_cast<int16_t>(sum / header.channels);
+        }
+        std::cout << "Converted " << header.channels << " channels to mono" << std::endl;
+    }
+
+    std::cout << "Loaded WAV file: " << filepath << std::endl;
+    std::cout << "  Sample rate: " << header.sample_rate << " Hz" << std::endl;
+    std::cout << "  Channels: " << header.channels << " (converted to mono)" << std::endl;
+    std::cout << "  Bit depth: " << header.bits_per_sample << " bits" << std::endl;
+    std::cout << "  Duration: " << static_cast<double>(pcm_data.size()) / EXPECTED_SAMPLE_RATE
+              << " seconds" << std::endl;
+    std::cout << "  Total samples: " << pcm_data.size() << std::endl;
+
+    return true;
+}
+
+/**
+ * @brief Run benchmark using a pre-recorded WAV file
+ * @param client_ws WebSocket client to use for communication
+ * @param wav_path Path to the benchmark WAV file
+ */
+void run_benchmark(websocket_client& client, const std::string& wav_path = "./benchmark.wav") {
+    std::cout << "Starting benchmark mode..." << std::endl;
+
+    // Load WAV file
+    std::vector<int16_t> pcm_data;
+
+    if (!load_wav_file(wav_path, pcm_data)) {
+        std::cout << "Failed to load benchmark WAV file: " << wav_path << std::endl;
+        return;
+    }
+
+    std::cout << "Loaded " << pcm_data.size() << " samples from " << wav_path << std::endl;
+
+    // Process in chunks
+    const size_t chunk_size = 1600;  // 100ms at 16kHz
+    size_t position = 0;
+
+    auto start_time = std::chrono::steady_clock::now();
+    size_t total_chunks = 0;
+
+    // Create session ID with timestamp
+    std::string session_id = "benchmark-" +
+                             std::to_string(
+                                 std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::system_clock::now().time_since_epoch()).count());
+
+    while (position < pcm_data.size() && g_running) {  // Use g_running instead of g_shutdown_requested
+        size_t samples_to_send = std::min(chunk_size, pcm_data.size() - position);
+
+        std::vector<int16_t> chunk(
+            pcm_data.begin() + position,
+            pcm_data.begin() + position + samples_to_send
+            );
+
+        // Use the existing send_audio_data method
+        if (!client.send_audio_data(chunk, session_id, "en")) {
+            std::cerr << "Failed to send audio chunk" << std::endl;
+            break;
+        }
+
+        position += samples_to_send;
+        total_chunks++;
+
+        // Simulate real-time playback
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        // Show progress
+        double progress = (position * 100.0) / pcm_data.size();
+        std::cout << "\rProgress: " << std::fixed << std::setprecision(1)
+                  << progress << "% (" << position << "/" << pcm_data.size() << " samples)"
+                  << std::flush;
+    }
+
+    auto end_time = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration<double>(end_time - start_time).count();
+
+    std::cout << "\nBenchmark completed in " << duration << " seconds" << std::endl;
+    std::cout << "Sent " << position << " samples in " << total_chunks << " chunks" << std::endl;
+    std::cout << "Average chunk size: " << (position / std::max(total_chunks, size_t(1)))
+              << " samples" << std::endl;
+    std::cout << "Average throughput: " << (position / duration) << " samples/second" << std::endl;
+    std::cout << "Real-time factor: " << (duration / (position / 16000.0)) << "x" << std::endl;
+    std::cout << "Session ID: " << session_id << std::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -176,7 +392,8 @@ int main(int argc, char* argv[]) {
             std::cerr << "Failed to send audio data" << std::endl;
         } else if (verbose) {
             if (packet_count % 10 == 0) {  // Less frequent in verbose mode
-                std::cout << "[AUDIO] Sent packet #" << packet_count << " (" << pcm_data.size() << " samples)" << std::endl;
+                std::cout << "[AUDIO] Sent packet #" << packet_count << " (" << pcm_data.size()
+                          << " samples)" << std::endl;
                 std::cout << "> " << std::flush;  // Show prompt again
             }
         }
@@ -322,13 +539,24 @@ int main(int argc, char* argv[]) {
                     std::cout << "You can play the file with:" << std::endl;
                     std::cout << "  ffplay -f s16le -ar 16000 -ac 1 test_audio.raw" << std::endl;
                     std::cout << "Or convert to WAV:" << std::endl;
-                    std::cout << "  ffmpeg -f s16le -ar 16000 -ac 1 -i test_audio.raw test_audio.wav" << std::endl;
+                    std::cout << "  ffmpeg -f s16le -ar 16000 -ac 1 -i test_audio.raw test_audio.wav"
+                              << std::endl;
                 } else {
-                    std::cout << "WARNING: File is empty. Microphone may not be working or accessible." << std::endl;
+                    std::cout << "WARNING: File is empty. Microphone may not be working or accessible."
+                              << std::endl;
                 }
             } else {
                 std::cout << "ERROR: Could not open test file" << std::endl;
             }
+        } else if (command == "benchmark" || command.find("benchmark ") == 0) {
+            std::string wav_path = "./benchmark.wav";
+
+            // Check for custom path
+            if (command.find(" ") != std::string::npos) {
+                wav_path = command.substr(command.find(" ") + 1);
+            }
+
+            run_benchmark(client, wav_path);
         } else {
             std::cout << "Unknown command: " << command << std::endl;
             std::cout << "Type 'help' for available commands" << std::endl;
