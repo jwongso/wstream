@@ -16,6 +16,11 @@
 #include <thread>
 #include <iostream>
 #include <cstring>
+#include <cmath>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 audio_processor::audio_processor(const config& cfg)
     : m_config(cfg), m_is_active(false) {
@@ -35,6 +40,9 @@ audio_processor::audio_processor(const config& cfg)
     m_pcmf32.clear();
     m_pcmf32_new.clear();
     m_pcmf32_old.clear();
+
+    // Initialize VAD timestamp
+    m_last_vad_time = std::chrono::steady_clock::now();
 }
 
 audio_processor::~audio_processor() {
@@ -75,11 +83,15 @@ void audio_processor::resume() {
     if (m_audio) {
         m_audio->resume();
         m_is_active = true;
+        // Reset VAD timestamp
+        m_last_vad_time = std::chrono::steady_clock::now();
     }
 }
 
 bool audio_processor::get_processed_samples(std::vector<float>& samples) {
-    if (!m_audio || !m_is_active) return false;
+    if (!m_audio || !m_is_active) {
+        return false;
+    }
 
     samples.clear();
 
@@ -89,7 +101,9 @@ bool audio_processor::get_processed_samples(std::vector<float>& samples) {
         process_vad();
     }
 
-    if (m_pcmf32.empty()) return false;
+    if (m_pcmf32.empty()) {
+        return false;
+    }
 
     // Use move semantics for better performance
     samples = std::move(m_pcmf32);
@@ -104,6 +118,7 @@ void audio_processor::process_non_vad() {
     // Step 1: Collect enough audio data
     while (true) {
         m_audio->get(m_config.step_ms, m_pcmf32_new);
+
         // Safety check: Drop audio if we can't process fast enough
         if (static_cast<int>(m_pcmf32_new.size()) > 2 * m_n_samples_step) {
             std::cerr << "WARNING: cannot process audio fast enough, dropping audio..." << std::endl;
@@ -144,6 +159,67 @@ void audio_processor::process_non_vad() {
     }
 }
 
+void audio_processor::high_pass_filter(std::vector<float>& data, float cutoff, float sample_rate) {
+    const float rc = 1.0f / (2.0f * M_PI * cutoff);
+    const float dt = 1.0f / sample_rate;
+    const float alpha = dt / (rc + dt);
+
+    float y = data[0];
+
+    for (size_t i = 1; i < data.size(); i++) {
+        y = alpha * (y + data[i] - data[i - 1]);
+        data[i] = y;
+    }
+}
+
+bool audio_processor::vad_simple(std::vector<float>& pcmf32, int sample_rate, int last_ms,
+                                 float vad_thold, float freq_thold, bool verbose) {
+    const int n_samples = pcmf32.size();
+    const int n_samples_last = (sample_rate * last_ms) / 1000;
+
+    if (n_samples_last >= n_samples) {
+        // not enough samples - assume no speech
+        return false;
+    }
+
+    // Create a copy for filtering if needed
+    std::vector<float> pcmf32_filtered = pcmf32;
+
+    if (freq_thold > 0.0f) {
+        high_pass_filter(pcmf32_filtered, freq_thold, sample_rate);
+    }
+
+    float energy_all = 0.0f;
+    float energy_last = 0.0f;
+
+    for (int i = 0; i < n_samples; i++) {
+        float sample_energy = fabsf(pcmf32_filtered[i]);
+        energy_all += sample_energy;
+
+        if (i >= n_samples - n_samples_last) {
+            energy_last += sample_energy;
+        }
+    }
+
+    energy_all /= n_samples;
+    energy_last /= n_samples_last;
+
+    if (verbose) {
+        float energy_ratio = (energy_all > 0) ? (energy_last / energy_all) : 0.0f;
+        std::cerr << "[VAD] energy_all: " << energy_all
+                  << ", energy_last: " << energy_last
+                  << ", ratio: " << energy_ratio
+                  << ", threshold: " << vad_thold << std::endl;
+    }
+
+    // If recent energy is too high compared to average, it's likely noise
+    if (energy_last > vad_thold * energy_all) {
+        return false;
+    }
+
+    return true;
+}
+
 void audio_processor::process_vad() {
     static auto t_last = std::chrono::steady_clock::now();
 
@@ -152,26 +228,60 @@ void audio_processor::process_vad() {
 
     if (t_diff < VAD_PROCESS_INTERVAL_MS) {
         std::this_thread::sleep_for(std::chrono::milliseconds(VAD_SLEEP_MS));
-        m_pcmf32.clear();  // Clear buffer when not processing
+        m_pcmf32.clear();
         return;
     }
 
-    // Get a small chunk for VAD detection
-    m_pcmf32_new.clear();  // Clear before getting new data
+    // Get a chunk of audio for VAD detection
+    m_pcmf32_new.clear();
     m_audio->get(VAD_DETECTION_LENGTH_MS, m_pcmf32_new);
 
-    // Run VAD
-    if (::vad_simple(m_pcmf32_new, m_config.sample_rate, VAD_DETECTION_LENGTH_MS,
-                     VAD_ENERGY_THRESHOLD, VAD_FREQ_THRESHOLD, false)) {
-        // Speech detected - get full audio segment
-        m_pcmf32.clear();  // Clear before getting new data
-        m_audio->get(m_config.length_ms, m_pcmf32);
-    } else {
-        // No speech detected
+    // Check if we got any samples
+    if (m_pcmf32_new.empty()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(VAD_SLEEP_MS));
-        m_pcmf32.clear();  // Clear buffer when not processing
+        m_pcmf32.clear();
         return;
     }
 
-    t_last = t_now;
+    // Need enough samples for VAD
+    size_t expected_samples = (VAD_DETECTION_LENGTH_MS * m_config.sample_rate) / 1000;
+    if (m_pcmf32_new.size() < expected_samples) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(VAD_SLEEP_MS));
+        m_pcmf32.clear();
+        return;
+    }
+
+    // Run VAD on the audio chunk
+    // Use a smaller window for "last" comparison (e.g., 200ms out of 1000ms)
+    const int VAD_LAST_MS = 200;  // Check last 200ms against full 1000ms
+
+    bool speech_detected = vad_simple(m_pcmf32_new, m_config.sample_rate,
+                                      VAD_LAST_MS,  // Use smaller window
+                                      VAD_ENERGY_THRESHOLD,
+                                      VAD_FREQ_THRESHOLD,
+                                      false);  // Disable verbose output
+
+    if (speech_detected) {
+        // Speech detected - get full audio segment for processing
+        m_pcmf32.clear();
+        m_audio->get(m_config.length_ms, m_pcmf32);
+
+        // Make sure we got enough audio
+        size_t min_samples = (m_config.step_ms * m_config.sample_rate) / 1000;
+        if (m_pcmf32.size() < min_samples) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(VAD_SLEEP_MS));
+            m_pcmf32.clear();
+            return;
+        }
+
+        // IMPORTANT: Clear the audio buffer to prevent repetition
+        m_audio->clear();
+
+        // Reset the timer to prevent immediate reprocessing
+        t_last = t_now + std::chrono::milliseconds(500);  // Add extra delay after speech
+    } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds(VAD_SLEEP_MS));
+        m_pcmf32.clear();
+        return;
+    }
 }

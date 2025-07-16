@@ -17,6 +17,7 @@
 #include <vector>
 #include <memory>
 #include <atomic>
+#include <cmath>
 
 /**
  * @file audio_processor.h
@@ -69,10 +70,10 @@ public:
     static constexpr int VAD_DETECTION_LENGTH_MS = 1000;
 
     /// VAD energy threshold (higher = more sensitive)
-    static constexpr float VAD_ENERGY_THRESHOLD = 0.85f;
+    static constexpr float VAD_ENERGY_THRESHOLD = 0.65f;
 
     /// VAD frequency threshold in Hz
-    static constexpr float VAD_FREQ_THRESHOLD = 100.0f;
+    static constexpr float VAD_FREQ_THRESHOLD = 150.0f;
 
     /// Sleep duration when waiting for audio data
     static constexpr int AUDIO_WAIT_SLEEP_MS = 1;
@@ -109,6 +110,9 @@ public:
         /// Enable Voice Activity Detection
         bool use_vad;
 
+        /// Force VAD detection (always detect speech in non-silent sections)
+        bool force_vad_detection;
+
         /**
          * @brief Default constructor with optimal settings
          *
@@ -120,7 +124,8 @@ public:
             , length_ms(DEFAULT_LENGTH_MS)
             , keep_ms(DEFAULT_KEEP_MS)
             , sample_rate(WHISPER_SAMPLE_RATE)
-            , use_vad(DEFAULT_USE_VAD) {}
+            , use_vad(DEFAULT_USE_VAD)
+            , force_vad_detection(false) {}
     };
 
     /**
@@ -262,6 +267,9 @@ private:
     /// Flag indicating if audio capture is active
     std::atomic<bool> m_is_active{false};
 
+    /// Last VAD check timestamp
+    std::chrono::steady_clock::time_point m_last_vad_time;
+
     /**
      * @brief Processes audio in continuous mode (fixed time intervals)
      *
@@ -277,4 +285,25 @@ private:
      * reducing computational load during silence periods.
      */
     void process_vad();
+
+    /**
+     * @brief Apply high-pass filter to audio data
+     * @param data Audio samples to filter (modified in place)
+     * @param cutoff Cutoff frequency in Hz
+     * @param sample_rate Sample rate in Hz
+     */
+    void high_pass_filter(std::vector<float>& data, float cutoff, float sample_rate);
+
+    /**
+     * @brief Simple VAD detection using energy comparison
+     * @param pcmf32 Audio samples to analyze
+     * @param sample_rate Sample rate in Hz
+     * @param last_ms Duration of recent audio to check (milliseconds)
+     * @param vad_thold Energy threshold (0.0 to 1.0)
+     * @param freq_thold High-pass filter frequency threshold
+     * @param verbose Enable debug output
+     * @return true if speech detected, false otherwise
+     */
+    bool vad_simple(std::vector<float>& pcmf32, int sample_rate, int last_ms,
+                    float vad_thold, float freq_thold, bool verbose);
 };

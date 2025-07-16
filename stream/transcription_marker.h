@@ -17,8 +17,8 @@
 
 class transcription_marker {
 private:
-    std::vector<std::string> reference_words;
-    size_t current_ref_index = 0;
+    std::vector<std::string> m_reference_words;
+    size_t m_current_ref_index = 0;
 
     // ANSI color codes
     const std::string RED = "\033[91m";      // Error words
@@ -29,20 +29,20 @@ private:
 
 public:
     void load_reference(const std::string& text) {
-        reference_words.clear();
+        m_reference_words.clear();
         std::istringstream stream(text);
         std::string word;
         while (stream >> word) {
             // Store normalized version for comparison
             std::transform(word.begin(), word.end(), word.begin(), ::tolower);
-            reference_words.push_back(word);
+            m_reference_words.push_back(word);
         }
-        current_ref_index = 0;
-        std::cout << "[Benchmark] Loaded " << reference_words.size() << " reference words" << std::endl;
+        m_current_ref_index = 0;
+        std::cout << "[Benchmark] Loaded " << m_reference_words.size() << " reference words" << std::endl;
     }
 
     std::string mark_differences(const std::string& hypothesis) {
-        if (reference_words.empty()) return hypothesis;
+        if (m_reference_words.empty()) return hypothesis;
 
         // Tokenize hypothesis
         std::vector<std::string> hyp_words;
@@ -72,8 +72,8 @@ public:
             bool found = false;
             const size_t LOOK_AHEAD = 3;
 
-            for (size_t j = 0; j <= LOOK_AHEAD && (current_ref_index + j) < reference_words.size(); ++j) {
-                std::string ref_clean = reference_words[current_ref_index + j];
+            for (size_t j = 0; j <= LOOK_AHEAD && (m_current_ref_index + j) < m_reference_words.size(); ++j) {
+                std::string ref_clean = m_reference_words[m_current_ref_index + j];
                 ref_clean.erase(std::remove_if(ref_clean.begin(), ref_clean.end(),
                                                [](char c) { return !std::isalnum(c); }),
                                 ref_clean.end());
@@ -87,7 +87,7 @@ public:
                         // Found but with skipped words - show in yellow
                         result << YELLOW << hyp_words[i] << RESET;
                     }
-                    current_ref_index += j + 1;  // Skip to position after matched word
+                    m_current_ref_index += j + 1;  // Skip to position after matched word
                     found = true;
                     break;
                 }
@@ -104,7 +104,7 @@ public:
 
     // Alternative marking style with brackets AND colors
     std::string mark_differences_with_brackets(const std::string& hypothesis) {
-        if (reference_words.empty()) return hypothesis;
+        if (m_reference_words.empty()) return hypothesis;
 
         // Tokenize hypothesis
         std::vector<std::string> hyp_words;
@@ -134,8 +134,8 @@ public:
             bool found = false;
             const size_t LOOK_AHEAD = 3;
 
-            for (size_t j = 0; j <= LOOK_AHEAD && (current_ref_index + j) < reference_words.size(); ++j) {
-                std::string ref_clean = reference_words[current_ref_index + j];
+            for (size_t j = 0; j <= LOOK_AHEAD && (m_current_ref_index + j) < m_reference_words.size(); ++j) {
+                std::string ref_clean = m_reference_words[m_current_ref_index + j];
                 ref_clean.erase(std::remove_if(ref_clean.begin(), ref_clean.end(),
                                                [](char c) { return !std::isalnum(c); }),
                                 ref_clean.end());
@@ -143,7 +143,7 @@ public:
                 if (hyp_clean == ref_clean) {
                     // Found match!
                     result << hyp_words[i];  // Normal text
-                    current_ref_index += j + 1;
+                    m_current_ref_index += j + 1;
                     found = true;
                     break;
                 }
@@ -160,12 +160,17 @@ public:
 
     // Reset to beginning of reference
     void reset() {
-        current_ref_index = 0;
+        m_current_ref_index = 0;
+    }
+
+    void reset_for_chunk() {
+        // Don't fully reset - just move back a few words to help with overlap
+        //m_current_ref_index = m_current_ref_index > 10 ? m_current_ref_index - 10 : 0;
     }
 
     // Get current position (for debugging)
     size_t get_position() const {
-        return current_ref_index;
+        return m_current_ref_index;
     }
 
     // Check if color output is supported
@@ -173,8 +178,7 @@ public:
 #ifdef _WIN32
         return false;  // Windows console needs special handling
 #else
-        const char* term = std::getenv("TERM");
-        return term && std::string(term) != "dumb";
+        return true;
 #endif
     }
 

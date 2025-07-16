@@ -18,8 +18,8 @@
 
 struct transcription_result {
     std::string text;
-    float avg_logprob = 0.0f;      // Average log probability (higher = better)
-    float no_speech_prob = 0.0f;   // Probability of no speech (lower = better)
+    float avg_logprob = 0.0f;       // Average log probability (higher = better)
+    float no_speech_prob = 0.0f;    // Probability of no speech (lower = better)
     float entropy = 0.0f;           // Entropy (lower = more confident)
     int n_tokens = 0;               // Number of tokens
 };

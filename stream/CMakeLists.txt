@@ -11,6 +11,29 @@ find_package(nlohmann_json REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system)
 find_package(SDL2 REQUIRED)
 find_package(Threads REQUIRED)
+find_package(hyni_websocket_server REQUIRED)
+find_path(CONCURRENTQUEUE_INCLUDE_DIR
+    NAMES moodycamel/concurrentqueue.h
+    PATHS /usr/include/concurrentqueue
+          /usr/local/include/concurrentqueue
+          /usr/include
+          /usr/local/include
+)
+
+if(NOT CONCURRENTQUEUE_INCLUDE_DIR)
+    if(EXISTS /etc/fedora-release)
+        message(FATAL_ERROR
+            "Could not find moodycamel/concurrentqueue.h\n"
+            "On Fedora, install it with:\n"
+            "  sudo dnf install moodycamel-concurrentqueue-devel\n"
+            "Searched in: /usr/include/concurrentqueue")
+    else()
+        message(FATAL_ERROR
+            "Could not find moodycamel/concurrentqueue.h\n"
+            "Please install the concurrentqueue development headers.\n"
+            "Searched in: /usr/include/concurrentqueue")
+    endif()
+endif()
 
 # Option to build tests
 option(BUILD_TESTS "Build test suite" ON)
@@ -26,7 +49,10 @@ add_library(${TARGET} STATIC
     common-sdl.cpp
 )
 
-target_include_directories(${TARGET} PUBLIC ${SDL2_INCLUDE_DIRS})
+target_include_directories(${TARGET} PUBLIC
+    ${SDL2_INCLUDE_DIRS}
+    ${CONCURRENTQUEUE_INCLUDE_DIR}
+)
 target_link_libraries(${TARGET} PRIVATE ${SDL2_LIBRARIES})
 
 set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -40,7 +66,6 @@ set(LIB_SOURCES
     audio_processor.cpp
     whisper_engine.cpp
     text_processor.cpp
-    websocket_server.cpp
     websocket_audio_source.cpp
     audio_source_factory.cpp
     base64.cpp
@@ -53,7 +78,6 @@ set(LIB_HEADERS
     audio_processor.h
     whisper_engine.h
     text_processor.h
-    websocket_server.h
     audio_source.h
     websocket_audio_source.h
     audio_source_factory.h
@@ -70,6 +94,7 @@ target_link_libraries(${LIB_TARGET} PUBLIC
     common
     common-sdl
     whisper
+    hyni_websocket_server::hyni_websocket_server
     nlohmann_json::nlohmann_json
     Boost::system
     Threads::Threads
@@ -84,7 +109,7 @@ target_link_libraries(${TARGET} PRIVATE ${LIB_TARGET})
 install(TARGETS ${TARGET} RUNTIME)
 
 # Tests
-if(BUILD_TESTS)
+if(BUILD_TESTING)
     enable_testing()
 
     # Find Google Test
@@ -97,12 +122,10 @@ if(BUILD_TESTS)
         tests/test_text_processor.cpp
         tests/test_audio_processor.cpp
         tests/test_whisper_engine.cpp
-        tests/test_websocket_server.cpp
         tests/test_wstream_app.cpp
         tests/test_audio_source.cpp
         tests/test_websocket_audio_source.cpp
         tests/test_audio_processor_source.cpp
-        tests/test_websocket_sever_command.cpp
     )
 
     add_executable(${TEST_TARGET} ${TEST_SOURCES})
