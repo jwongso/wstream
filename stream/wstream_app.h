@@ -36,7 +36,7 @@ class websocket_server;
 class whisper_engine;
 class text_processor;
 class websocket_audio_source;
-class audio_processor;
+class sdl_audio_source;
 class benchmark_audio_source;
 
 /**
@@ -449,7 +449,7 @@ private:
      * @param processor Audio processor to configure
      * @return true if configuration successful, false otherwise
      */
-    bool configure_audio_processor_vad(audio_processor* processor);
+    bool configure_audio_processor_vad(sdl_audio_source* processor);
 
     /**
      * @brief Initializes benchmark components

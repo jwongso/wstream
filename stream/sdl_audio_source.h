@@ -28,7 +28,7 @@
  */
 
 /**
- * @class audio_processor
+ * @class sdl_audio_source
  * @brief Handles real-time audio capture and preprocessing for speech recognition
  *
  * This class manages audio input from microphones or other audio devices,
@@ -49,7 +49,7 @@
  * This class is not thread-safe. External synchronization is required if
  * accessed from multiple threads.
  */
-class audio_processor : public audio_source {
+class sdl_audio_source : public audio_source {
 public:
     /// Default step size in milliseconds for continuous processing
     static constexpr int DEFAULT_STEP_MS = 3000;
@@ -135,12 +135,12 @@ public:
      * Pre-allocates audio buffers based on configuration to avoid
      * runtime memory allocations during processing.
      */
-    explicit audio_processor(const config& cfg = config{});
+    explicit sdl_audio_source(const config& cfg = config{});
 
     /**
      * @brief Destructor - ensures audio resources are properly released
      */
-    ~audio_processor() override;
+    ~sdl_audio_source() override;
 
     //
     // audio_source interface implementation
@@ -185,7 +185,7 @@ public:
     bool is_active() const override { return m_is_active; }
 
     //
-    // Original audio_processor interface
+    // Original sdl_audio_source interface
     //
 
     /**

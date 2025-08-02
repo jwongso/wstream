@@ -10,7 +10,7 @@
 // -------------------------------------------------------------------------------------------------
 
 #include "audio_source_factory.h"
-#include "audio_processor.h"
+#include "sdl_audio_source.h"
 #include "websocket_audio_source.h"
 #include "benchmark_audio_source.h"
 #include <iostream>
@@ -21,7 +21,7 @@ std::unique_ptr<audio_source> audio_source_factory::create(audio_source_type typ
     switch (type) {
     case audio_source_type::SDL_MICROPHONE: {
         std::cout << "[Factory] Creating SDL microphone audio source..." << std::endl;
-        auto source = std::make_unique<audio_processor>();
+        auto source = std::make_unique<sdl_audio_source>();
         if (source->initialize()) {
             std::cout << "[Factory] SDL microphone audio source created successfully" << std::endl;
             return source;

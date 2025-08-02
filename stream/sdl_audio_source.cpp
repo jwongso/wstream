@@ -9,7 +9,7 @@
 //
 // -------------------------------------------------------------------------------------------------
 
-#include "audio_processor.h"
+#include "sdl_audio_source.h"
 #include "common.h"
 #include <algorithm>
 #include <chrono>
@@ -22,7 +22,7 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-audio_processor::audio_processor(const config& cfg)
+sdl_audio_source::sdl_audio_source(const config& cfg)
     : m_config(cfg), m_is_active(false) {
 
     // Pre-calculate sample counts for efficiency
@@ -45,13 +45,13 @@ audio_processor::audio_processor(const config& cfg)
     m_last_vad_time = std::chrono::steady_clock::now();
 }
 
-audio_processor::~audio_processor() {
+sdl_audio_source::~sdl_audio_source() {
     if (m_audio) {
         m_audio.reset();
     }
 }
 
-bool audio_processor::initialize(int device_id) {
+bool sdl_audio_source::initialize(int device_id) {
     // If a specific device ID is requested, validate it first
     if (device_id >= 0) {
         int num_devices = SDL_GetNumAudioDevices(SDL_TRUE);
@@ -72,14 +72,14 @@ bool audio_processor::initialize(int device_id) {
     return true;
 }
 
-void audio_processor::pause() {
+void sdl_audio_source::pause() {
     if (m_audio) {
         m_audio->pause();
         m_is_active = false;
     }
 }
 
-void audio_processor::resume() {
+void sdl_audio_source::resume() {
     if (m_audio) {
         m_audio->resume();
         m_is_active = true;
@@ -88,7 +88,7 @@ void audio_processor::resume() {
     }
 }
 
-bool audio_processor::get_processed_samples(std::vector<float>& samples) {
+bool sdl_audio_source::get_processed_samples(std::vector<float>& samples) {
     if (!m_audio || !m_is_active) {
         return false;
     }
@@ -114,7 +114,7 @@ bool audio_processor::get_processed_samples(std::vector<float>& samples) {
     return !samples.empty();
 }
 
-void audio_processor::process_non_vad() {
+void sdl_audio_source::process_non_vad() {
     // Step 1: Collect enough audio data
     while (true) {
         m_audio->get(m_config.step_ms, m_pcmf32_new);
@@ -159,7 +159,7 @@ void audio_processor::process_non_vad() {
     }
 }
 
-void audio_processor::high_pass_filter(std::vector<float>& data, float cutoff, float sample_rate) {
+void sdl_audio_source::high_pass_filter(std::vector<float>& data, float cutoff, float sample_rate) {
     const float rc = 1.0f / (2.0f * M_PI * cutoff);
     const float dt = 1.0f / sample_rate;
     const float alpha = dt / (rc + dt);
@@ -172,7 +172,7 @@ void audio_processor::high_pass_filter(std::vector<float>& data, float cutoff, f
     }
 }
 
-bool audio_processor::vad_simple(std::vector<float>& pcmf32, int sample_rate, int last_ms,
+bool sdl_audio_source::vad_simple(std::vector<float>& pcmf32, int sample_rate, int last_ms,
                                  float vad_thold, float freq_thold, bool verbose) {
     const int n_samples = pcmf32.size();
     const int n_samples_last = (sample_rate * last_ms) / 1000;
@@ -220,7 +220,7 @@ bool audio_processor::vad_simple(std::vector<float>& pcmf32, int sample_rate, in
     return true;
 }
 
-void audio_processor::process_vad() {
+void sdl_audio_source::process_vad() {
     static auto t_last = std::chrono::steady_clock::now();
 
     const auto t_now = std::chrono::steady_clock::now();

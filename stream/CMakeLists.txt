@@ -63,7 +63,7 @@ set(LIB_TARGET wstream_lib)
 
 set(LIB_SOURCES
     wstream_app.cpp
-    audio_processor.cpp
+    sdl_audio_source.cpp
     whisper_engine.cpp
     text_processor.cpp
     websocket_audio_source.cpp
@@ -75,7 +75,7 @@ set(LIB_SOURCES
 
 set(LIB_HEADERS
     wstream_app.h
-    audio_processor.h
+    sdl_audio_source.h
     whisper_engine.h
     text_processor.h
     audio_source.h

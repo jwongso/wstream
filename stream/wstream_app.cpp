@@ -14,7 +14,7 @@
 #include "text_processor.h"
 #include "websocket_audio_source.h"
 #include "benchmark_audio_source.h"
-#include "audio_processor.h"
+#include "sdl_audio_source.h"
 #include <iostream>
 #include <chrono>
 #include <csignal>
@@ -710,14 +710,14 @@ bool wstream_app::switch_audio_source(audio_source_type new_source_type) {
 std::unique_ptr<audio_source> wstream_app::create_audio_source(audio_source_type source_type) {
     // Handle audio processor with VAD
     if (source_type == audio_source_type::SDL_MICROPHONE) {
-        audio_processor::config cfg;
+        sdl_audio_source::config cfg;
         cfg.use_vad = m_vad_enabled;
 
         if (m_chunk_size_ms > 0) {
             cfg.step_ms = m_chunk_size_ms;
         }
 
-        auto processor = std::make_unique<audio_processor>(cfg);
+        auto processor = std::make_unique<sdl_audio_source>(cfg);
 
         if (m_vad_enabled) {
             std::cout << "[Audio] Created SDL microphone source with VAD enabled" << std::endl;
@@ -802,7 +802,7 @@ void wstream_app::update_comparison_table(const benchmark_manager::benchmark_res
     }
 }
 
-bool wstream_app::configure_audio_processor_vad(audio_processor* processor) {
+bool wstream_app::configure_audio_processor_vad(sdl_audio_source* processor) {
     if (!processor) return false;
 
     // VAD is configured via constructor config
