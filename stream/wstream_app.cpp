@@ -22,6 +22,7 @@
 #include <iomanip>
 #include <sstream>
 #include <algorithm>
+#include <fstream>
 
 // Global shutdown flag
 std::atomic<bool> g_shutdown_requested{false};
@@ -152,9 +153,6 @@ void wstream_app::run() {
     }
 
     std::cout << "WStream is running. Audio source: " << get_audio_source_name() << std::endl;
-    if (m_vad_enabled) {
-        std::cout << "Voice Activity Detection (VAD) is enabled" << std::endl;
-    }
     std::cout << "WebSocket server listening on port " << m_websocket_port << std::endl;
     std::cout << "Press Ctrl+C to stop." << std::endl;
 
@@ -224,7 +222,6 @@ bool wstream_app::start_benchmark(const std::string& wav_path) {
     // Display enabled features
     std::cout << "[Benchmark] Features: ";
     std::vector<std::string> features;
-    if (m_vad_enabled) features.push_back("VAD");
     if (m_benchmark_enable_marker) features.push_back("text marking");
     if (m_benchmark_enable_playback) features.push_back("audio playback");
 
@@ -269,6 +266,12 @@ bool wstream_app::start_benchmark(const std::string& wav_path) {
 
         if (m_benchmark_enable_marker) {
             m_transcription_marker.load_reference(ref_text);
+            m_transcription_marker.set_fuzzy_matching(true);
+            m_transcription_marker.set_fuzzy_threshold(m_marker_config.fuzzy_threshold);
+            m_transcription_marker.set_search_distance(m_marker_config.search_distance);
+            m_transcription_marker.set_show_confidence(m_marker_config.show_confidence);
+            m_transcription_marker.set_logging(false);
+            m_transcription_marker.set_streaming_mode(true);
         }
     } else {
         std::cout << "[Benchmark] Warning: No reference text found." << std::endl;
@@ -379,7 +382,7 @@ void wstream_app::stop_benchmark() {
 
     // Reset benchmark state
     m_benchmark_mode = false;
-    m_transcription_marker.reset();
+    //m_transcription_marker.reset();
 
     // Switch back to default audio source
     if (m_audio_source_type == audio_source_type::BENCHMARK) {
@@ -399,10 +402,6 @@ bool wstream_app::validate_model_path(const std::string& path) const {
 
 void wstream_app::process_audio_loop() {
     std::vector<float> audio_samples;
-    // Start benchmark if in benchmark mode
-    if (m_benchmark_mode && m_benchmark_manager) {
-        m_benchmark_manager->start();
-    }
 
     while (m_is_running) {
         // Check SDL events
@@ -501,13 +500,20 @@ bool wstream_app::parse_command_line(int argc, char* argv[]) {
             m_audio_source_type = audio_source_type::BENCHMARK;
             std::cout << "Benchmark mode enabled" << std::endl;
         }
-        else if (arg == "--vad") {
-            m_vad_enabled = true;
-            std::cout << "Voice Activity Detection (VAD) enabled" << std::endl;
-        }
         else if (arg == "--enable-marker") {
             m_benchmark_enable_marker = true;
             std::cout << "Text marking enabled for benchmark mode" << std::endl;
+        }
+        else if (arg == "--marker-threshold" && i + 1 < argc) {
+            m_marker_config.fuzzy_threshold = std::stod(argv[++i]);
+            std::cout << "Marker fuzzy threshold set to: " << m_marker_config.fuzzy_threshold << std::endl;
+        }
+        else if (arg == "--marker-simple") {
+            m_marker_config.use_simple_mode = true;
+            std::cout << "Using simple marker mode (less verbose)" << std::endl;
+        }
+        else if (arg == "--no-marker-confidence") {
+            m_marker_config.show_confidence = false;
         }
         else if (arg == "--play-audio") {
             m_benchmark_enable_playback = true;
@@ -548,7 +554,6 @@ void wstream_app::show_help(const std::string& program_name) const {
     std::cout << "Options:\n";
     std::cout << "  --audio-source <type>  Audio source type (microphone, websocket) [default: microphone]\n";
     std::cout << "  --port <port>          WebSocket server port [default: " << DEFAULT_WEBSOCKET_PORT << "]\n";
-    std::cout << "  --vad                  Enable Voice Activity Detection (works with all audio sources)\n";
     std::cout << "  --chunk-size <ms>      Set audio chunk size in milliseconds ("
               << MIN_CHUNK_SIZE_MS << "-" << MAX_CHUNK_SIZE_MS << ")\n";
     std::cout << "  --benchmark            Run in benchmark mode with default WAV file\n";
@@ -565,12 +570,13 @@ void wstream_app::show_help(const std::string& program_name) const {
 
     std::cout << "Examples:\n";
     std::cout << "  " << program_name << "                                    # Use default settings\n";
-    std::cout << "  " << program_name << " --vad                               # Use microphone with VAD\n";
     std::cout << "  " << program_name << " --benchmark                         # Run benchmark\n";
-    std::cout << "  " << program_name << " --benchmark --vad                  # Benchmark with VAD\n";
-    std::cout << "  " << program_name << " --benchmark --vad --enable-marker  # Benchmark with VAD and marking\n";
-    std::cout << "  " << program_name << " --vad --chunk-size 2000            # Microphone with VAD and custom chunk\n";
-    std::cout << "  " << program_name << " --audio-source websocket --vad     # WebSocket with VAD\n";
+    std::cout << "  " << program_name << " --benchmark --enable-marker        # Benchmark with text marking\n";
+    std::cout << "  " << program_name << " --chunk-size 2000                  # Microphone with custom chunk size\n";
+    std::cout << "  " << program_name << " --audio-source websocket           # WebSocket audio source\n";
+
+    std::cout << "\nNote: VAD support is prepared but not yet implemented. The --vad flag is accepted\n";
+    std::cout << "      but will not affect audio processing until VAD wrapper is integrated.\n";
 }
 
 bool wstream_app::setup_websocket_server() {
@@ -616,7 +622,6 @@ bool wstream_app::setup_websocket_server() {
                 response["audio_source"] = audio_source_factory::type_to_string(m_audio_source_type);
                 response["audio_source_name"] = get_audio_source_name();
                 response["is_running"] = is_running();
-                response["vad_enabled"] = m_vad_enabled;
                 response["benchmark_mode"] = m_benchmark_mode.load();
                 response["client_count"] = m_websocket_server->get_client_count();
             }
@@ -708,35 +713,25 @@ bool wstream_app::switch_audio_source(audio_source_type new_source_type) {
 }
 
 std::unique_ptr<audio_source> wstream_app::create_audio_source(audio_source_type source_type) {
-    // Handle audio processor with VAD
+    // Create configuration for SDL audio source
     if (source_type == audio_source_type::SDL_MICROPHONE) {
         sdl_audio_source::config cfg;
-        cfg.use_vad = m_vad_enabled;
 
         if (m_chunk_size_ms > 0) {
             cfg.step_ms = m_chunk_size_ms;
         }
 
-        auto processor = std::make_unique<sdl_audio_source>(cfg);
+        auto source = std::make_unique<sdl_audio_source>(cfg);
 
-        if (m_vad_enabled) {
-            std::cout << "[Audio] Created SDL microphone source with VAD enabled" << std::endl;
-        }
         if (m_chunk_size_ms > 0) {
             std::cout << "[Audio] Using chunk size: " << m_chunk_size_ms << "ms" << std::endl;
         }
 
-        return processor;
+        return source;
     }
 
     // Use factory for other types
-    auto new_source = audio_source_factory::create(source_type);
-
-    if (source_type == audio_source_type::WEBSOCKET_CLIENT && m_vad_enabled) {
-        std::cout << "[Audio] VAD mode enabled for WebSocket source" << std::endl;
-    }
-
-    return new_source;
+    return audio_source_factory::create(source_type);
 }
 
 void wstream_app::setup_websocket_audio_callback() {
@@ -802,14 +797,6 @@ void wstream_app::update_comparison_table(const benchmark_manager::benchmark_res
     }
 }
 
-bool wstream_app::configure_audio_processor_vad(sdl_audio_source* processor) {
-    if (!processor) return false;
-
-    // VAD is configured via constructor config
-    // This method is kept for potential future runtime configuration
-    return true;
-}
-
 std::unique_ptr<benchmark_audio_source> wstream_app::initialize_benchmark_source(
     const std::string& wav_path) {
 
@@ -817,7 +804,6 @@ std::unique_ptr<benchmark_audio_source> wstream_app::initialize_benchmark_source
     config.wav_file_path = wav_path;
     config.reference_text_path = wav_path + ".txt";
     config.real_time_simulation = true;
-    config.use_vad = m_vad_enabled;
 
     if (m_chunk_size_ms > 0) {
         config.step_ms = m_chunk_size_ms;
@@ -845,10 +831,12 @@ void wstream_app::process_transcription_result(const std::string& transcription,
     // Display output
     if (m_benchmark_mode && m_benchmark_manager) {
         if (m_benchmark_enable_marker && !m_benchmark_manager->get_reference_text().empty()) {
-            // Mark differences with colors/brackets
-            std::string marked_text = transcription_marker::is_color_supported() ?
-                                          m_transcription_marker.mark_differences_with_brackets(processed_text) :
-                                          m_transcription_marker.mark_differences(processed_text);
+            std::string marked_text;
+            if (m_marker_config.use_simple_mode) {
+                marked_text = m_transcription_marker.mark_differences_simple(processed_text);
+            } else {
+                marked_text = m_transcription_marker.mark_streaming_chunk(processed_text);
+            }
 
             std::cout << "[" << get_audio_source_name() << "] " << marked_text << std::endl;
         } else {

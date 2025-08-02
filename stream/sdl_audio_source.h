@@ -17,69 +17,51 @@
 #include <vector>
 #include <memory>
 #include <atomic>
-#include <cmath>
-
-/**
- * @file audio_processor.h
- * @brief Audio capture and preprocessing for real-time speech recognition
- * @author WStream Development Team
- * @version 2.0
- * @date 2024
- */
 
 /**
  * @class sdl_audio_source
- * @brief Handles real-time audio capture and preprocessing for speech recognition
+ * @brief SDL2-based microphone audio source implementation
  *
- * This class manages audio input from microphones or other audio devices,
- * performing necessary preprocessing such as:
- * - Continuous audio buffering
- * - Sample rate conversion
- * - Voice Activity Detection (VAD) when enabled
- * - Audio segmentation for optimal recognition
+ * This class manages audio input from microphones using SDL2, providing:
+ * - Continuous audio capture from system audio devices
+ * - Configurable buffer sizes and processing windows
+ * - Overlap handling for context preservation
+ * - Automatic sample rate configuration
  *
- * The processor supports both continuous processing and VAD-based processing modes.
- * In continuous mode, audio is processed in fixed-time segments with overlap.
- * In VAD mode, processing is triggered only when speech is detected.
- *
- * Implements the audio_source interface for seamless integration with the
- * audio source switching system.
+ * The audio is captured in fixed-time segments with configurable overlap
+ * to ensure smooth processing and context preservation between chunks.
  *
  * @par Thread Safety:
  * This class is not thread-safe. External synchronization is required if
  * accessed from multiple threads.
+ *
+ * @par Usage Example:
+ * @code
+ * sdl_audio_source::config cfg;
+ * cfg.step_ms = 3000;  // 3-second chunks
+ *
+ * auto source = std::make_unique<sdl_audio_source>(cfg);
+ * if (source->initialize() && source->start()) {
+ *     std::vector<float> samples;
+ *     while (source->get_audio_samples(samples)) {
+ *         // Process audio samples...
+ *     }
+ * }
+ * @endcode
  */
 class sdl_audio_source : public audio_source {
 public:
-    /// Default step size in milliseconds for continuous processing
+    /// Default step size in milliseconds for audio processing
     static constexpr int DEFAULT_STEP_MS = 3000;
 
     /// Default total length of audio buffer in milliseconds
     static constexpr int DEFAULT_LENGTH_MS = 10000;
 
     /// Default amount of audio to keep between processing steps (for context)
-    static constexpr int DEFAULT_KEEP_MS = 200;
-
-    /// Default VAD mode setting
-    static constexpr bool DEFAULT_USE_VAD = false;
-
-    /// VAD processing interval in milliseconds
-    static constexpr int VAD_PROCESS_INTERVAL_MS = 2000;
-
-    /// VAD detection length in milliseconds
-    static constexpr int VAD_DETECTION_LENGTH_MS = 1000;
-
-    /// VAD energy threshold (higher = more sensitive)
-    static constexpr float VAD_ENERGY_THRESHOLD = 0.65f;
-
-    /// VAD frequency threshold in Hz
-    static constexpr float VAD_FREQ_THRESHOLD = 150.0f;
+    static constexpr int DEFAULT_KEEP_MS = 50;
 
     /// Sleep duration when waiting for audio data
     static constexpr int AUDIO_WAIT_SLEEP_MS = 1;
-
-    /// Sleep duration during VAD processing
-    static constexpr int VAD_SLEEP_MS = 100;
 
     /// Multiplier for detecting audio processing overload
     static constexpr int OVERLOAD_MULTIPLIER = 2;
@@ -92,7 +74,7 @@ public:
 
     /**
      * @struct config
-     * @brief Configuration parameters for audio processing
+     * @brief Configuration parameters for SDL audio capture
      */
     struct config {
         /// Time step between processing windows (milliseconds)
@@ -107,12 +89,6 @@ public:
         /// Audio sample rate (Hz)
         int sample_rate;
 
-        /// Enable Voice Activity Detection
-        bool use_vad;
-
-        /// Force VAD detection (always detect speech in non-silent sections)
-        bool force_vad_detection;
-
         /**
          * @brief Default constructor with optimal settings
          *
@@ -123,19 +99,17 @@ public:
             : step_ms(DEFAULT_STEP_MS)
             , length_ms(DEFAULT_LENGTH_MS)
             , keep_ms(DEFAULT_KEEP_MS)
-            , sample_rate(WHISPER_SAMPLE_RATE)
-            , use_vad(DEFAULT_USE_VAD)
-            , force_vad_detection(false) {}
+            , sample_rate(WHISPER_SAMPLE_RATE) {}
     };
 
     /**
-     * @brief Constructs audio processor with specified configuration
+     * @brief Constructs SDL audio source with specified configuration
      * @param cfg Configuration parameters for audio processing
      *
      * Pre-allocates audio buffers based on configuration to avoid
      * runtime memory allocations during processing.
      */
-    explicit sdl_audio_source(const config& cfg = config{});
+    explicit sdl_audio_source(const config& cfg = config());
 
     /**
      * @brief Destructor - ensures audio resources are properly released
@@ -147,49 +121,50 @@ public:
     //
 
     /**
-     * @brief Initializes audio capture system (audio_source interface)
+     * @brief Initializes audio capture system
      * @return true if initialization successful, false otherwise
      */
     bool initialize() override { return initialize(-1); }
 
     /**
-     * @brief Starts audio capture (audio_source interface)
+     * @brief Starts audio capture
      * @return true if started successfully, false otherwise
      */
-    bool start() override { resume(); return true; }
+    bool start() override;
 
     /**
-     * @brief Stops audio capture (audio_source interface)
+     * @brief Stops audio capture
      */
-    void stop() override { pause(); }
+    void stop() override;
 
     /**
-     * @brief Retrieves processed audio samples (audio_source interface)
+     * @brief Retrieves processed audio samples
      * @param[out] samples Vector to store the retrieved audio samples
      * @return true if samples were retrieved, false if no samples available
+     *
+     * Returns audio samples in chunks with overlap for context preservation.
+     * The chunk size is determined by the step_ms configuration parameter.
      */
-    bool get_audio_samples(std::vector<float>& samples) override {
-        return get_processed_samples(samples);
-    }
+    bool get_audio_samples(std::vector<float>& samples) override;
 
     /**
-     * @brief Gets the name/identifier of this audio source (audio_source interface)
+     * @brief Gets the name/identifier of this audio source
      * @return String identifier for this audio source
      */
     std::string get_name() const override { return "SDL Microphone"; }
 
     /**
-     * @brief Checks if the audio source is active (audio_source interface)
+     * @brief Checks if the audio source is active
      * @return true if active and providing samples, false otherwise
      */
     bool is_active() const override { return m_is_active; }
 
     //
-    // Original sdl_audio_source interface
+    // SDL-specific interface
     //
 
     /**
-     * @brief Initializes audio capture system
+     * @brief Initializes audio capture system with specific device
      * @param device_id Audio device ID (-1 for default device)
      * @return true if initialization successful, false otherwise
      *
@@ -200,44 +175,26 @@ public:
     bool initialize(int device_id);
 
     /**
-     * @brief Pauses audio capture
-     *
-     * Temporarily stops audio capture while maintaining the audio
-     * system state. Can be resumed with resume().
-     */
-    void pause();
-
-    /**
-     * @brief Resumes audio capture
-     *
-     * Restarts audio capture after it was paused with pause().
-     */
-    void resume();
-
-    /**
-     * @brief Retrieves processed audio samples ready for recognition
-     * @param samples Output vector to receive audio samples
-     * @return true if samples are available, false if no data ready
-     *
-     * This method processes raw audio input according to the configured
-     * mode (continuous or VAD) and returns samples when ready for
-     * speech recognition. The returned samples are normalized and
-     * formatted for optimal Whisper processing.
-     *
-     * @par Processing Modes:
-     * - **Continuous Mode**: Returns samples at regular intervals
-     * - **VAD Mode**: Returns samples only when speech is detected
-     */
-    bool get_processed_samples(std::vector<float>& samples);
-
-    /**
      * @brief Gets the current configuration
      * @return Reference to the current configuration object
      */
     const config& get_config() const { return m_config; }
 
+    /**
+     * @brief Gets the number of available audio devices
+     * @return Number of audio input devices available
+     */
+    static int get_device_count();
+
+    /**
+     * @brief Gets the name of a specific audio device
+     * @param device_id Device ID to query
+     * @return Device name, or empty string if invalid ID
+     */
+    static std::string get_device_name(int device_id);
+
 private:
-    /// Audio processing configuration
+    /// Audio capture configuration
     config m_config;
 
     /// Audio capture system interface
@@ -267,43 +224,12 @@ private:
     /// Flag indicating if audio capture is active
     std::atomic<bool> m_is_active{false};
 
-    /// Last VAD check timestamp
-    std::chrono::steady_clock::time_point m_last_vad_time;
-
     /**
-     * @brief Processes audio in continuous mode (fixed time intervals)
+     * @brief Processes audio with sliding window and overlap
      *
-     * Continuously captures audio in fixed-size chunks with overlap
-     * to ensure no speech is missed at segment boundaries.
+     * Captures audio in fixed-size chunks with overlap to ensure
+     * no speech is missed at segment boundaries. This method handles
+     * the buffering and overlap management for smooth audio processing.
      */
-    void process_non_vad();
-
-    /**
-     * @brief Processes audio using Voice Activity Detection
-     *
-     * Only processes audio when speech activity is detected,
-     * reducing computational load during silence periods.
-     */
-    void process_vad();
-
-    /**
-     * @brief Apply high-pass filter to audio data
-     * @param data Audio samples to filter (modified in place)
-     * @param cutoff Cutoff frequency in Hz
-     * @param sample_rate Sample rate in Hz
-     */
-    void high_pass_filter(std::vector<float>& data, float cutoff, float sample_rate);
-
-    /**
-     * @brief Simple VAD detection using energy comparison
-     * @param pcmf32 Audio samples to analyze
-     * @param sample_rate Sample rate in Hz
-     * @param last_ms Duration of recent audio to check (milliseconds)
-     * @param vad_thold Energy threshold (0.0 to 1.0)
-     * @param freq_thold High-pass filter frequency threshold
-     * @param verbose Enable debug output
-     * @return true if speech detected, false otherwise
-     */
-    bool vad_simple(std::vector<float>& pcmf32, int sample_rate, int last_ms,
-                    float vad_thold, float freq_thold, bool verbose);
+    void process_audio();
 };

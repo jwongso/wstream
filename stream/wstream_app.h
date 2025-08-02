@@ -350,9 +350,6 @@ private:
     /** @brief Benchmark mode active */
     std::atomic<bool> m_benchmark_mode{false};
 
-    /** @brief VAD enabled flag */
-    bool m_vad_enabled{false};
-
     /** @brief Text marking enabled for benchmark */
     bool m_benchmark_enable_marker{false};
 
@@ -369,6 +366,15 @@ private:
 
     /** @brief Latest transcription result */
     std::string m_latest_transcription;
+
+    struct TranscriptionMarkerConfig {
+        bool enabled = true;
+        bool show_confidence = true;
+        double fuzzy_threshold = 0.9;
+        int search_distance = 10;
+        bool show_deletions = true;
+        bool use_simple_mode = false;  // For less verbose output
+    } m_marker_config;
 
     // Private methods
 
@@ -443,13 +449,6 @@ private:
      * @param results Benchmark results to add to comparison
      */
     void update_comparison_table(const benchmark_manager::benchmark_results& results);
-
-    /**
-     * @brief Configures audio processor with VAD settings
-     * @param processor Audio processor to configure
-     * @return true if configuration successful, false otherwise
-     */
-    bool configure_audio_processor_vad(sdl_audio_source* processor);
 
     /**
      * @brief Initializes benchmark components

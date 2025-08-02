@@ -43,7 +43,6 @@ bool benchmark_audio_source::initialize() {
     std::cout << "  - Step size: " << m_config.step_ms << " ms" << std::endl;
     std::cout << "  - Buffer length: " << m_config.length_ms << " ms" << std::endl;
     std::cout << "  - Keep/overlap: " << m_config.keep_ms << " ms" << std::endl;
-    std::cout << "  - VAD mode: " << (m_config.use_vad ? "enabled" : "disabled") << std::endl;
 
     // Load WAV file
     if (!load_wav_file(m_config.wav_file_path)) {
@@ -78,15 +77,13 @@ bool benchmark_audio_source::start() {
     m_total_chunks_processed = 0;
     m_start_time = std::chrono::steady_clock::now();
     m_last_chunk_time = m_start_time;
-    m_last_vad_time = m_start_time;
     m_end_of_file_reported = false;
-    m_last_processed_end = 0;
 
     // Clear buffers for fresh start
     m_pcmf32_new.clear();
     m_pcmf32_old.clear();
 
-    std::cout << "[Benchmark] Started benchmark audio source (simulating audio_processor behavior)" << std::endl;
+    std::cout << "[Benchmark] Started benchmark audio source (simulating sdl_audio_source behavior)" << std::endl;
     return true;
 }
 
@@ -117,16 +114,9 @@ bool benchmark_audio_source::get_audio_samples(std::vector<float>& samples) {
     bool got_samples = false;
 
     try {
-        if (!m_config.use_vad) {
-            got_samples = process_non_vad(samples);
-        } else {
-            got_samples = process_vad(samples);
-        }
+        got_samples = process_audio(samples);
     } catch (const std::exception& e) {
         std::cerr << "[Benchmark] Exception during audio processing: " << e.what() << std::endl;
-        return false;
-    } catch (...) {
-        std::cerr << "[Benchmark] Unknown exception during audio processing" << std::endl;
         return false;
     }
 
@@ -137,7 +127,6 @@ bool benchmark_audio_source::get_audio_samples(std::vector<float>& samples) {
                 // Reset for looping
                 m_current_position = 0;
                 m_pcmf32_old.clear();
-                m_last_processed_end = 0;  // Reset tracking for VAD mode
                 std::cout << "[Benchmark] Looping audio..." << std::endl;
                 return get_audio_samples(samples); // Recursive call to get samples from start
             } else {
@@ -171,7 +160,7 @@ bool benchmark_audio_source::get_audio_samples(std::vector<float>& samples) {
     return true;
 }
 
-bool benchmark_audio_source::process_non_vad(std::vector<float>& samples) {
+bool benchmark_audio_source::process_audio(std::vector<float>& samples) {
     // Step 1: Read new audio data from buffer
     m_pcmf32_new.clear();
 
@@ -217,88 +206,6 @@ bool benchmark_audio_source::process_non_vad(std::vector<float>& samples) {
         m_pcmf32_old = samples;
     }
 
-    return true;
-}
-
-bool benchmark_audio_source::process_vad(std::vector<float>& samples) {
-    const auto t_now = std::chrono::steady_clock::now();
-    const auto t_diff = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            t_now - m_last_vad_time).count();
-
-    if (t_diff < 100) {  // Short interval to prevent duplicate processing
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        samples.clear();
-        return false;
-    }
-
-    // Calculate samples for detection and processing
-    const size_t detection_samples = (VAD_DETECTION_WINDOW_MS * m_config.sample_rate) / 1000;
-    const size_t segment_samples = (VAD_SEGMENT_SIZE_MS * m_config.sample_rate) / 1000;
-    size_t samples_available = m_audio_buffer.size() - m_current_position;
-
-    if (samples_available < detection_samples) {
-        return false;
-    }
-
-    // Check energy in detection window
-    float energy = 0.0f;
-    const size_t end_pos = std::min(m_current_position + detection_samples, m_audio_buffer.size());
-    for (size_t i = m_current_position; i < end_pos; i++) {
-        float sample = m_audio_buffer[i];
-        energy += sample * sample;
-    }
-    energy /= detection_samples;
-
-    // Determine if speech is detected
-    bool speech_detected = (energy > VAD_ENERGY_THRESHOLD);
-    if (m_config.force_vad_detection && energy > VAD_MIN_ENERGY) {
-        speech_detected = true;
-    }
-
-    if (speech_detected) {
-        // Get audio segment for processing
-        size_t samples_to_read = std::min(segment_samples, samples_available);
-
-        // Avoid duplicating content
-        if (m_current_position < m_last_processed_end) {
-            if (m_last_processed_end >= m_audio_buffer.size()) {
-                return false;
-            }
-            m_current_position = m_last_processed_end;
-            samples_available = m_audio_buffer.size() - m_current_position;
-            if (samples_available < detection_samples) {
-                return false;
-            }
-            samples_to_read = std::min(segment_samples, samples_available);
-        }
-
-        // Prepare output buffer
-        samples.clear();
-        samples.reserve(samples_to_read);
-
-        // Copy samples with bounds checking
-        const size_t safe_end = std::min(m_current_position + samples_to_read, m_audio_buffer.size());
-        samples.insert(samples.end(),
-                       m_audio_buffer.begin() + m_current_position,
-                       m_audio_buffer.begin() + safe_end);
-
-        // Update last processed position
-        m_last_processed_end = m_current_position + samples.size();
-
-        // Advance position for next check
-        const size_t advance_samples = (VAD_ADVANCE_MS * m_config.sample_rate) / 1000;
-        m_current_position = std::min(m_current_position + advance_samples, m_audio_buffer.size());
-    } else {
-        // No speech detected - advance by smaller step
-        const size_t skip_samples = (VAD_SKIP_MS * m_config.sample_rate) / 1000;
-        m_current_position = std::min(m_current_position + skip_samples, m_audio_buffer.size());
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        samples.clear();
-        return false;
-    }
-
-    m_last_vad_time = t_now;
     return true;
 }
 
@@ -531,9 +438,7 @@ void benchmark_audio_source::reset() {
     m_total_chunks_processed = 0;
     m_start_time = std::chrono::steady_clock::now();
     m_last_chunk_time = m_start_time;
-    m_last_vad_time = m_start_time;
     m_end_of_file_reported = false;
-    m_last_processed_end = 0;
 
     // Clear buffers
     m_pcmf32_new.clear();

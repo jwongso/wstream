@@ -25,15 +25,14 @@
  *
  * @details This class provides a specialized audio source that reads PCM audio data
  * from WAV files and delivers it in controlled chunks to simulate real-time audio
- * processing. It closely mimics the buffer management behavior of audio_processor
+ * processing. It closely mimics the buffer management behavior of sdl_audio_source
  * for accurate benchmarking.
  *
  * Features:
  * - WAV file loading with format validation
- * - Sliding window processing with overlap (like audio_processor)
+ * - Sliding window processing with overlap (like sdl_audio_source)
  * - Configurable step and overlap sizes
  * - Real-time playback simulation
- * - VAD simulation mode
  * - Audio looping for extended tests
  * - Automatic stereo to mono conversion
  * - Reference text loading for accuracy measurements
@@ -47,7 +46,7 @@
  * @code
  * benchmark_audio_source::config cfg;
  * cfg.wav_file_path = "test.wav";
- * cfg.use_vad = true;
+ * cfg.real_time_simulation = true;
  *
  * benchmark_audio_source source(cfg);
  * if (source.initialize() && source.start()) {
@@ -59,7 +58,7 @@
  * @endcode
  *
  * @see audio_source
- * @see audio_processor
+ * @see sdl_audio_source
  * @see benchmark_manager
  */
 class benchmark_audio_source : public audio_source {
@@ -70,7 +69,7 @@ public:
      *
      * @details Controls various aspects of benchmark audio playback including
      * file paths, chunk sizes, and simulation modes. Parameters are designed
-     * to match audio_processor behavior for realistic benchmarking.
+     * to match sdl_audio_source behavior for realistic benchmarking.
      */
     struct config {
         /**
@@ -99,21 +98,21 @@ public:
 
         /**
          * @brief Time step between processing windows (milliseconds)
-         * @details Matches audio_processor::step_ms for realistic simulation.
+         * @details Matches sdl_audio_source::step_ms for realistic simulation.
          * Controls how much audio is processed in each chunk.
          */
         int step_ms;
 
         /**
          * @brief Total length of audio buffer (milliseconds)
-         * @details Matches audio_processor::length_ms. Maximum amount of audio
+         * @details Matches sdl_audio_source::length_ms. Maximum amount of audio
          * that can be buffered at once.
          */
         int length_ms;
 
         /**
          * @brief Amount of previous audio to retain for context (milliseconds)
-         * @details Matches audio_processor::keep_ms. Creates overlap between
+         * @details Matches sdl_audio_source::keep_ms. Creates overlap between
          * consecutive chunks for better accuracy at boundaries.
          */
         int keep_ms;
@@ -133,13 +132,6 @@ public:
         bool loop_audio;
 
         /**
-         * @brief Enable Voice Activity Detection simulation
-         * @details When true, simulates VAD behavior like audio_processor.
-         * Only processes audio when speech is detected.
-         */
-        bool use_vad;
-
-        /**
          * @brief Maximum allowed audio file size in bytes
          * @details Prevents excessive memory usage from large files.
          * Default: 1GB
@@ -154,32 +146,23 @@ public:
         bool strict_format_validation;
 
         /**
-         * @brief Force VAD detection for benchmark
-         * @details When true, always detects speech in non-silent sections.
-         * Useful for benchmarking with known speech files.
-         */
-        bool force_vad_detection;
-
-        /**
-         * @brief Default constructor with audio_processor-compatible defaults
+         * @brief Default constructor with sdl_audio_source-compatible defaults
          *
          * @details Initializes configuration with values that match
-         * audio_processor defaults for accurate benchmarking.
+         * sdl_audio_source defaults for accurate benchmarking.
          */
         config()
             : wav_file_path("./benchmark.wav"),
             reference_text_path("./benchmark.txt"),
             sample_rate(16000),
             channels(1),
-            step_ms(3000),        // Match audio_processor::DEFAULT_STEP_MS
-            length_ms(10000),     // Match audio_processor::DEFAULT_LENGTH_MS
-            keep_ms(200),         // Match audio_processor::DEFAULT_KEEP_MS
+            step_ms(3000),
+            length_ms(10000),
+            keep_ms(50),
             real_time_simulation(true),
             loop_audio(false),
-            use_vad(false),       // Match audio_processor::DEFAULT_USE_VAD
             max_file_size(1024 * 1024 * 1024), // 1GB
-            strict_format_validation(false),
-            force_vad_detection(true)
+            strict_format_validation(false)
         {
         }
     };
@@ -195,7 +178,7 @@ public:
      * @param cfg Configuration parameters
      *
      * @details Initializes the benchmark audio source with the provided configuration.
-     * Pre-allocates buffers similar to audio_processor for consistent memory behavior.
+     * Pre-allocates buffers similar to sdl_audio_source for consistent memory behavior.
      * The actual audio file loading occurs during initialize().
      *
      * @see initialize()
@@ -206,7 +189,6 @@ public:
      * @brief Destructor - ensures proper cleanup of resources
      *
      * @details Stops audio processing if active and releases all allocated resources.
-     * Ensures all threads are properly terminated before destruction.
      */
     ~benchmark_audio_source() override;
 
@@ -220,7 +202,7 @@ public:
      * 1. Loads and validates the WAV audio file
      * 2. Loads the reference transcription text (if available)
      * 3. Validates audio format parameters
-     * 4. Pre-allocates buffers for audio data (like audio_processor)
+     * 4. Pre-allocates buffers for audio data (like sdl_audio_source)
      *
      * @pre Configuration must be set with valid file paths
      * @post Audio data is loaded and ready for processing
@@ -262,12 +244,9 @@ public:
      * @return true if samples were retrieved, false if no more audio available
      *
      * @details Retrieves the next chunk of audio samples using sliding window
-     * processing similar to audio_processor. Maintains overlap between chunks
+     * processing similar to sdl_audio_source. Maintains overlap between chunks
      * for context preservation. If real_time_simulation is enabled, this method
      * may block to maintain real-time playback rate.
-     *
-     * In VAD mode, returns samples only when speech is detected.
-     * In non-VAD mode, returns samples at regular intervals with overlap.
      *
      * @note The samples vector is cleared before adding new samples
      * @note Thread-safe with respect to other methods
@@ -293,7 +272,6 @@ public:
      * @return Session ID string
      *
      * @details Returns a constant session identifier for benchmark runs.
-     * Can be overridden by derived classes for custom session management.
      *
      * @note Thread-safe
      */
@@ -346,9 +324,6 @@ public:
      * @brief Get total number of audio samples processed
      * @return Number of samples processed since start()
      *
-     * @details Returns the cumulative count of audio samples delivered through
-     * get_audio_samples() since the last start() call.
-     *
      * @note Thread-safe
      */
     size_t get_total_samples_processed() const { return m_total_samples_processed; }
@@ -356,9 +331,6 @@ public:
     /**
      * @brief Get total number of chunks processed
      * @return Number of chunks delivered since start()
-     *
-     * @details Returns the number of times get_audio_samples() has successfully
-     * returned audio data since the last start() call.
      *
      * @note Thread-safe
      */
@@ -368,9 +340,6 @@ public:
      * @brief Get the elapsed processing time in milliseconds
      * @return Processing duration in milliseconds
      *
-     * @details Returns the wall-clock time elapsed since start() was called.
-     * Useful for calculating real-time factors.
-     *
      * @note Thread-safe
      */
     double get_processing_duration_ms() const;
@@ -378,9 +347,6 @@ public:
     /**
      * @brief Get the total duration of loaded audio in milliseconds
      * @return Audio duration in milliseconds
-     *
-     * @details Calculates the total duration of the loaded audio based on
-     * the number of samples and sample rate.
      *
      * @note Thread-safe
      */
@@ -390,9 +356,6 @@ public:
      * @brief Get the loaded reference transcription text
      * @return Reference text string
      *
-     * @details Returns the reference transcription text loaded from file,
-     * or an empty string if no reference text was loaded.
-     *
      * @note Thread-safe
      */
     std::string get_reference_text() const { return m_reference_text; }
@@ -400,9 +363,6 @@ public:
     /**
      * @brief Get the current configuration
      * @return Const reference to the configuration object
-     *
-     * @details Returns the current configuration settings.
-     * Useful for querying runtime parameters.
      *
      * @note Thread-safe
      */
@@ -423,7 +383,7 @@ public:
 
     /**
      * @brief Set the chunk size for audio delivery
-     * @param ms Step size in milliseconds (like audio_processor step_ms)
+     * @param ms Step size in milliseconds (like sdl_audio_source step_ms)
      *
      * @details Changes the step size of audio chunks delivered by get_audio_samples().
      * Valid range is MIN_CHUNK_SIZE_MS to MAX_CHUNK_SIZE_MS.
@@ -437,9 +397,6 @@ public:
      * @brief Enable or disable real-time simulation
      * @param enable true to enable, false to disable
      *
-     * @details Controls whether audio is delivered at real-time rate or as fast
-     * as possible. Real-time simulation is useful for testing realistic scenarios.
-     *
      * @note Thread-safe
      */
     void set_real_time_simulation(bool enable) { m_config.real_time_simulation = enable; }
@@ -447,9 +404,6 @@ public:
     /**
      * @brief Set custom session identifier
      * @param session_id New session identifier
-     *
-     * @details Allows setting a custom session ID for tracking purposes.
-     * Useful for correlating benchmark results.
      *
      * @note Thread-safe
      */
@@ -459,9 +413,6 @@ public:
      * @brief Set completion callback
      * @param callback Function to call when audio processing completes
      *
-     * @details Sets a callback function that will be invoked when the end
-     * of the audio file is reached (unless looping is enabled).
-     *
      * @note Callback is invoked from the audio processing thread
      */
     void set_completion_callback(completion_callback_t callback) { m_completion_callback = callback; }
@@ -470,14 +421,11 @@ public:
      * @brief Check if end of file was reached
      * @return true if end of file reached, false otherwise
      *
-     * @details Returns true if the audio source has processed all available
-     * audio data and reached the end of the file.
-     *
      * @note Thread-safe
      */
     bool is_end_of_file() const { return m_end_of_file_reported; }
 
-    // Constants matching audio_processor
+    // Constants matching sdl_audio_source
 
     /** @brief Minimum allowed chunk size in milliseconds */
     static constexpr int MIN_CHUNK_SIZE_MS = 100;
@@ -496,26 +444,6 @@ public:
 
     /** @brief Duration for 30-second audio buffer (for memory pre-allocation) */
     static constexpr double BUFFER_30S_DURATION = 30000.0;
-
-    // VAD-specific constants
-
-    /** @brief VAD detection window size in milliseconds */
-    static constexpr int VAD_DETECTION_WINDOW_MS = 500;
-
-    /** @brief VAD segment size in milliseconds */
-    static constexpr int VAD_SEGMENT_SIZE_MS = 3000;
-
-    /** @brief VAD advance size in milliseconds (overlap between segments) */
-    static constexpr int VAD_ADVANCE_MS = 1500;
-
-    /** @brief VAD skip size when no speech detected in milliseconds */
-    static constexpr int VAD_SKIP_MS = 500;
-
-    /** @brief VAD energy threshold for speech detection */
-    static constexpr float VAD_ENERGY_THRESHOLD = 0.0001f;
-
-    /** @brief VAD minimum energy to consider as potential speech */
-    static constexpr float VAD_MIN_ENERGY = 0.00001f;
 
 private:
     /** @brief Configuration parameters */
@@ -537,21 +465,18 @@ private:
 
     /**
      * @brief Buffer for newly read audio samples
-     * @details Temporary storage for current chunk (like audio_processor::m_pcmf32_new)
+     * @details Temporary storage for current chunk (like sdl_audio_source::m_pcmf32_new)
      */
     std::vector<float> m_pcmf32_new;
 
     /**
      * @brief Buffer retaining previous audio for context
-     * @details Overlap buffer for sliding window (like audio_processor::m_pcmf32_old)
+     * @details Overlap buffer for sliding window (like sdl_audio_source::m_pcmf32_old)
      */
     std::vector<float> m_pcmf32_old;
 
     /** @brief Current position in the main audio buffer (sample index) */
     size_t m_current_position{0};
-
-    /** @brief Last processed position for VAD mode duplicate prevention */
-    size_t m_last_processed_end{0};
 
     // Pre-calculated sample counts
 
@@ -583,9 +508,6 @@ private:
     /** @brief Timestamp of last chunk delivery (for real-time simulation) */
     std::chrono::steady_clock::time_point m_last_chunk_time;
 
-    /** @brief Timestamp for VAD simulation throttling */
-    std::chrono::steady_clock::time_point m_last_vad_time;
-
     /** @brief Flag indicating end of file was reached */
     std::atomic<bool> m_end_of_file_reported{false};
 
@@ -595,26 +517,15 @@ private:
     // Helper methods
 
     /**
-     * @brief Process audio in continuous mode with overlap
+     * @brief Process audio with sliding window and overlap
      * @param[out] samples Output vector for processed samples
      * @return true if samples were processed, false if no more audio
      *
      * @details Implements sliding window processing with overlap preservation
-     * matching the behavior of audio_processor::process_non_vad().
+     * matching the behavior of sdl_audio_source::process_audio().
      * Maintains context between chunks using overlap buffer.
      */
-    bool process_non_vad(std::vector<float>& samples);
-
-    /**
-     * @brief Process audio using Voice Activity Detection simulation
-     * @param[out] samples Output vector for processed samples
-     * @return true if samples were processed, false if no speech detected
-     *
-     * @details Simulates VAD behavior matching audio_processor::process_vad().
-     * Only returns audio when speech energy exceeds threshold.
-     * Prevents duplicate processing of same audio segments.
-     */
-    bool process_vad(std::vector<float>& samples);
+    bool process_audio(std::vector<float>& samples);
 
     /**
      * @brief Simulate real-time delay between chunks
