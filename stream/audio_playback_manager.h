@@ -8,6 +8,7 @@
 #include <thread>
 #include <atomic>
 #include <condition_variable>
+#include <iostream>
 
 class audio_playback_manager {
 private:

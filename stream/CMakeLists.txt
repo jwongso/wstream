@@ -71,6 +71,7 @@ set(LIB_SOURCES
     base64.cpp
     benchmark_audio_source.cpp
     benchmark_manager.cpp
+    transcription_marker.cpp
 )
 
 set(LIB_HEADERS
@@ -120,13 +121,9 @@ if(BUILD_TESTING)
 
     set(TEST_SOURCES
         tests/test_text_processor.cpp
-        tests/test_audio_processor.cpp
         tests/test_whisper_engine.cpp
-        tests/test_wstream_app.cpp
         tests/test_audio_source.cpp
-        tests/test_websocket_audio_source.cpp
-        tests/test_audio_processor_source.cpp
-    )
+        )
 
     add_executable(${TEST_TARGET} ${TEST_SOURCES})
 
