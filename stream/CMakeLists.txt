@@ -34,3 +34,14 @@ target_link_libraries(${TARGET} PRIVATE
     ${CMAKE_THREAD_LIBS_INIT})
 
 install(TARGETS ${TARGET} RUNTIME)
+
+set(TARGET mira-poc)
+add_executable(${TARGET} mira-poc.cpp)
+
+target_link_libraries(${TARGET} PRIVATE
+    common
+    common-sdl
+    whisper
+    ${CMAKE_THREAD_LIBS_INIT})
+
+install(TARGETS ${TARGET} RUNTIME)

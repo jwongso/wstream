@@ -700,17 +700,18 @@ void websocket_server(std::shared_ptr<shared_state> state, net::io_context& ioc)
         const char* bind_env = std::getenv("WSTREAM_BIND");
         const char* port_env = std::getenv("WSTREAM_PORT");
         std::string bind_addr = bind_env ? bind_env : "127.0.0.1";
-        unsigned short port = 8080;
+        unsigned short port = 8765;
         if (port_env) {
             try { port = static_cast<unsigned short>(std::stoi(port_env)); }
-            catch (...) { port = 8080; }
+            catch (...) { port = 8765; }
         }
 
         tcp::endpoint ep{net::ip::make_address(bind_addr), port};
-        tcp::acceptor acceptor{ioc, ep};
-
-        // Set options for better connection handling
+        tcp::acceptor acceptor{ioc};
+        acceptor.open(ep.protocol());
         acceptor.set_option(tcp::acceptor::reuse_address(true));
+        acceptor.bind(ep);
+        acceptor.listen();
 
         std::cout << "WebSocket server listening on "
                   << bind_addr << ":" << port << std::endl;
